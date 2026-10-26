@@ -3,9 +3,11 @@ dotenv.config();
 
 import { GroqProvider } from './groq.js';
 import { GeminiProvider } from './gemini.js';
+import { OllamaProvider, defaultOllamaProvider } from './ollama.js';
 import { classifyProviderError } from './base.js';
 
 // Global singletons for providers
+export const ollamaProvider = defaultOllamaProvider;
 export const groqProvider = new GroqProvider();
 export const geminiProvider = new GeminiProvider();
 
@@ -31,12 +33,22 @@ export function getSession(sessionId) {
 }
 
 /**
- * Tests connection with primary Groq provider and Gemini fallback
+ * Tests connection with available AI providers (Priority: Local Ollama → Groq → Gemini)
  */
-export async function testAIConnection({ timeoutMs = 12000 } = {}) {
+export async function testAIConnection({ timeoutMs = 8000 } = {}) {
+  // 1. Try Local Ollama (Preferred if running)
+  if (await ollamaProvider.isAvailable()) {
+    try {
+      const ollamaRes = await ollamaProvider.testConnection({ timeoutMs: Math.min(timeoutMs, 4000) });
+      if (ollamaRes.status === 200 && ollamaRes.data.success) {
+        return ollamaRes;
+      }
+    } catch (_) {}
+  }
+
   let groqError = null;
 
-  // 1. Try Groq (Primary)
+  // 2. Try Groq
   if (groqProvider.isConfigured()) {
     try {
       const groqRes = await groqProvider.testConnection({ timeoutMs });
@@ -51,7 +63,7 @@ export async function testAIConnection({ timeoutMs = 12000 } = {}) {
     groqError = 'GROQ_API_KEY is not configured';
   }
 
-  // 2. Fallback to Gemini
+  // 3. Fallback to Gemini
   if (geminiProvider.isConfigured()) {
     console.warn(`[AgentQuest Manager] Groq test connection unavailable (${groqError}). Falling back to Gemini...`);
     const geminiRes = await geminiProvider.testConnection({ timeoutMs });
@@ -66,7 +78,7 @@ export async function testAIConnection({ timeoutMs = 12000 } = {}) {
     status: 400,
     data: {
       success: false,
-      error: 'Neither GROQ_API_KEY nor GEMINI_API_KEY is configured on the server. Please check your .env file.'
+      error: 'No AI providers available. Start Ollama ("ollama serve") or configure GROQ_API_KEY / GEMINI_API_KEY.'
     }
   };
 }
@@ -91,12 +103,25 @@ export async function startAgentSession({
     forceProvider = 'gemini';
   } else if (modelName && (modelName.includes('gpt') || modelName.includes('llama') || modelName.includes('mixtral'))) {
     forceProvider = 'groq';
+  } else if (modelName && (modelName.includes('qwen') || modelName.includes('ollama'))) {
+    forceProvider = 'ollama';
   }
 
-  // 1. Attempt Groq as Primary
-  if (forceProvider === 'gemini' || !groqProvider.isConfigured()) {
-    activeProvider = 'gemini';
-  } else {
+  // 1. Attempt Local Ollama (Preferred if available or explicitly requested)
+  const isOllamaPreferred = forceProvider === 'ollama' || (!forceProvider && await ollamaProvider.isAvailable());
+  if (isOllamaPreferred && forceProvider !== 'groq' && forceProvider !== 'gemini') {
+    try {
+      sessionResult = await ollamaProvider.startSession({ startPos });
+      activeProvider = 'ollama';
+    } catch (ollamaErr) {
+      console.warn(`[AgentQuest Manager] Local Ollama startSession failed: ${ollamaErr.message}. Falling back to Groq...`);
+      fallbackFrom = 'ollama';
+      activeProvider = null;
+    }
+  }
+
+  // 2. Attempt Groq as Secondary (or Primary if Ollama not used)
+  if (!activeProvider && forceProvider !== 'gemini' && groqProvider.isConfigured()) {
     try {
       sessionResult = await groqProvider.startSession({ startPos });
       activeProvider = 'groq';
@@ -108,13 +133,13 @@ export async function startAgentSession({
       } else {
         console.warn(`[AgentQuest Manager] Groq startSession failed (${classification.message.slice(0, 100)}). Falling back to Gemini...`);
       }
-      fallbackFrom = 'groq';
+      fallbackFrom = fallbackFrom || 'groq';
       activeProvider = 'gemini';
     }
   }
 
-  // 2. Fallback to Gemini if Groq failed or was bypassed
-  if (activeProvider === 'gemini') {
+  // 3. Fallback to Gemini if Ollama/Groq failed or was bypassed
+  if (!activeProvider || activeProvider === 'gemini') {
     if (!geminiProvider.isConfigured()) {
       return {
         status: 400,
@@ -127,6 +152,7 @@ export async function startAgentSession({
 
     try {
       sessionResult = await geminiProvider.startSession({ startPos, modelName });
+      activeProvider = 'gemini';
     } catch (geminiErr) {
       const classification = classifyProviderError(geminiErr);
       return {
@@ -134,13 +160,13 @@ export async function startAgentSession({
         data: {
           success: false,
           allProvidersUnavailable: true,
-          error: `All AI providers failed to initialize. Groq (${fallbackFrom ? 'fallback triggered' : 'not used'}), Gemini: ${classification.message}`
+          error: `All AI providers failed to initialize. Prior attempts: (${fallbackFrom || 'none'}), Gemini: ${classification.message}`
         }
       };
     }
   }
 
-  // 3. Store Authoritative Session State
+  // 4. Store Authoritative Session State
   const startCoord = `${startPos.row},${startPos.col}`;
   const sessionData = {
     sessionId,
@@ -154,6 +180,7 @@ export async function startAgentSession({
     maxApiBudget: 120,
     lastActivity: Date.now(),
     providerRequests: {
+      ollama: activeProvider === 'ollama' ? 1 : 0,
       groq: activeProvider === 'groq' ? 1 : 0,
       gemini: activeProvider === 'gemini' ? 1 : 0
     },
@@ -163,6 +190,9 @@ export async function startAgentSession({
     repeatedBlockedCount: 0,
     authoritativeHistory: [],
     lastToolCall: sessionResult.toolCall,
+    ollamaSession: activeProvider === 'ollama'
+      ? { messages: sessionResult.messages }
+      : null,
     groqSession: activeProvider === 'groq'
       ? { messages: sessionResult.messages, lastCallId: sessionResult.rawCallId }
       : null,
@@ -180,7 +210,7 @@ export async function startAgentSession({
       sessionId,
       provider: activeProvider,
       model: sessionResult.model,
-      fallbackFrom: fallbackFrom ? 'Groq' : sessionResult.fallbackFrom || undefined,
+      fallbackFrom: fallbackFrom ? (fallbackFrom.toLowerCase() === 'ollama' ? 'Ollama' : 'Groq') : sessionResult.fallbackFrom || undefined,
       toolCall: sessionResult.toolCall,
       thought: sessionResult.thought,
       actionCount: 1,
@@ -270,6 +300,11 @@ function enrichToolResponse(session, toolResponse) {
     } else if (obs.blockedReason === 'locked_door') {
       enriched.guidance = `Door at (${obs.target?.row ?? '?'}, ${obs.target?.col ?? '?'}) is locked. You must find and collect the golden key first, then call unlock() while adjacent.`;
     }
+  } else if (toolName === 'look' && session.recentActions.length >= 2) {
+    const prev = session.recentActions[session.recentActions.length - 2];
+    if (prev && prev.tool === 'look') {
+      enriched.guidance = `Surroundings at (${curr.row}, ${curr.col}) are already observed. Do NOT call look() again. Call move() in an open direction now.`;
+    }
   }
 
   return {
@@ -341,8 +376,80 @@ export async function stepAgentSession({
   let fallbackOccurred = false;
   let previousProvider = null;
 
-  // 3. Execute on Active Provider: GROQ
-  if (session.activeProvider === 'groq') {
+  // 3. Execute on Active Provider: OLLAMA
+  if (session.activeProvider === 'ollama') {
+    try {
+      stepResult = await ollamaProvider.stepSession({
+        messages: session.ollamaSession.messages,
+        toolResponse: enrichedToolResponse
+      });
+      session.providerRequests.ollama = (session.providerRequests.ollama || 0) + 1;
+      session.ollamaSession.messages = stepResult.messages;
+    } catch (ollamaErr) {
+      console.warn(`[AgentQuest Manager] Local Ollama step failed: ${ollamaErr.message}. Attempting cloud failover...`);
+      previousProvider = 'Local AI (Ollama)';
+
+      // Attempt failover to Groq
+      if (groqProvider.isConfigured()) {
+        try {
+          const messages = groqProvider.reconstructMessages({
+            startPos: session.startPos,
+            authoritativeHistory: session.authoritativeHistory
+          });
+          stepResult = await groqProvider.stepSession({
+            messages,
+            toolResponse: enrichedToolResponse
+          });
+          session.activeProvider = 'groq';
+          session.activeModel = groqProvider.getModelName();
+          session.groqSession = { messages: stepResult.messages, lastCallId: stepResult.rawCallId };
+          session.ollamaSession = null;
+          session.providerRequests.groq = (session.providerRequests.groq || 0) + 1;
+          fallbackOccurred = true;
+          console.log('[AgentQuest Manager] Mission migrated from Ollama to Groq!');
+        } catch (_) {}
+      }
+
+      // If Groq unavailable/failed, attempt Gemini
+      if (!stepResult && geminiProvider.isConfigured()) {
+        try {
+          const { chat, model } = await geminiProvider.reconstructChat({
+            startPos: session.startPos,
+            authoritativeHistory: session.authoritativeHistory
+          });
+          stepResult = await geminiProvider.stepSession({
+            chat,
+            toolResponse: enrichedToolResponse,
+            activeModel: model
+          });
+          session.activeProvider = 'gemini';
+          session.activeModel = model;
+          session.geminiSession = { chat: stepResult.chat, model };
+          session.ollamaSession = null;
+          session.providerRequests.gemini = (session.providerRequests.gemini || 0) + 1;
+          fallbackOccurred = true;
+          console.log('[AgentQuest Manager] Mission migrated from Ollama to Gemini!');
+        } catch (_) {}
+      }
+
+      if (!stepResult) {
+        if (session.authoritativeHistory.length > 0) {
+          session.authoritativeHistory.pop();
+        }
+        return {
+          status: 503,
+          data: {
+            success: false,
+            allProvidersUnavailable: true,
+            error: 'All AI providers are temporarily unavailable. Your mission is safely paused.',
+            actionCount: session.actionCount
+          }
+        };
+      }
+    }
+  }
+  // 4. Execute on Active Provider: GROQ
+  else if (session.activeProvider === 'groq') {
     try {
       stepResult = await groqProvider.stepSession({
         messages: session.groqSession.messages,

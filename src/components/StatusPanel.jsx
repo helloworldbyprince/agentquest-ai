@@ -72,10 +72,10 @@ export function StatusPanel({
             </span>
             {gameMode === 'agent' && (
               <span
-                className={`active-model-pill ${activeProvider === 'groq' ? 'provider-groq' : 'provider-gemini'}`}
+                className={`active-model-pill ${activeProvider === 'ollama' ? 'provider-ollama' : activeProvider === 'groq' ? 'provider-groq' : 'provider-gemini'}`}
                 title={`Active AI Provider: ${activeProvider.toUpperCase()} (${activeModel})`}
               >
-                {activeProvider === 'groq' ? '⚡ Groq: ' : '✨ Gemini: '}
+                {activeProvider === 'ollama' ? '💻 Local: ' : activeProvider === 'groq' ? '⚡ Groq: ' : '✨ Gemini: '}
                 {activeModel.includes('/') ? activeModel.split('/')[1] : activeModel}
               </span>
             )}

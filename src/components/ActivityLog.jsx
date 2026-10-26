@@ -50,8 +50,8 @@ function LogItem({ log }) {
     badgeText = 'MISSION CONTINUED';
   } else if (log.type === LOG_TYPES.GEMINI_RESPONSE || log.type === LOG_TYPES.AI_RESPONSE) {
     Icon = Sparkles;
-    badgeClass = log.provider === 'groq' ? 'badge-groq' : 'badge-gemini';
-    badgeText = log.provider === 'groq' ? 'GROQ DECISION' : 'GEMINI DECISION';
+    badgeClass = log.provider === 'ollama' ? 'badge-ollama' : log.provider === 'groq' ? 'badge-groq' : 'badge-gemini';
+    badgeText = log.provider === 'ollama' ? 'LOCAL AI DECISION' : log.provider === 'groq' ? 'GROQ DECISION' : 'GEMINI DECISION';
   } else if (log.type === LOG_TYPES.AGENT_ADAPTED) {
     Icon = Cpu;
     badgeClass = 'badge-adapted';

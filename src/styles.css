@@ -1398,6 +1398,7 @@ button {
 .badge-door { background: #FFEDD5; color: #C2410C; }
 .badge-win { background: var(--mint-bg); color: var(--mint-text); }
 .badge-start { background: var(--primary-subtle); color: var(--primary); }
+.badge-ollama { background: #D1FAE5; color: #047857; font-weight: 700; }
 .badge-groq { background: #FFEDD5; color: #EA580C; font-weight: 700; }
 .badge-gemini { background: #EDE9FE; color: #6D28D9; font-weight: 700; }
 .badge-adapted { background: #FEF3C7; color: #B45309; }
@@ -1412,6 +1413,12 @@ button {
   margin-left: 8px;
   box-shadow: var(--shadow-sm);
   transition: all 0.2s ease;
+}
+
+.provider-ollama {
+  background: #D1FAE5;
+  color: #047857;
+  border: 1px solid #6EE7B7;
 }
 
 .provider-groq {

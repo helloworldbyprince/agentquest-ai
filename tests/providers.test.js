@@ -5,6 +5,7 @@ dotenv.config();
 import {
   groqProvider,
   geminiProvider,
+  ollamaProvider,
   startAgentSession,
   stepAgentSession,
   stopAgentSession,
@@ -78,6 +79,8 @@ describe('Multi-Provider AI Architecture & Fallback', () => {
   });
 
   it('automatically falls back from Groq to Gemini on 429 Rate Limit during session start', async () => {
+    const origOllamaAvail = ollamaProvider.isAvailable;
+    ollamaProvider.isAvailable = vi.fn().mockResolvedValue(false);
     const origGroqStart = groqProvider.startSession;
     const origGeminiStart = geminiProvider.startSession;
 
@@ -104,12 +107,15 @@ describe('Multi-Provider AI Architecture & Fallback', () => {
       expect(res.data.provider).toBe('gemini');
       expect(res.data.toolCall.name).toBe('look');
     } finally {
+      ollamaProvider.isAvailable = origOllamaAvail;
       groqProvider.startSession = origGroqStart;
       geminiProvider.startSession = origGeminiStart;
     }
   });
 
   it('automatically falls back from Groq to Gemini on 503 Service Unavailable during session step', async () => {
+    const origOllamaAvail = ollamaProvider.isAvailable;
+    ollamaProvider.isAvailable = vi.fn().mockResolvedValue(false);
     const origStart = groqProvider.startSession;
     groqProvider.startSession = vi.fn().mockResolvedValue({
       model: 'openai/gpt-oss-20b',
@@ -120,7 +126,7 @@ describe('Multi-Provider AI Architecture & Fallback', () => {
     });
 
     // Start session on Groq
-    const startRes = await startAgentSession({ startPos: { row: 7, col: 1 } });
+    const startRes = await startAgentSession({ startPos: { row: 7, col: 1 }, forceProvider: 'groq' });
     const sessionId = startRes.data.sessionId;
 
     const origStep = groqProvider.stepSession;
@@ -164,6 +170,7 @@ describe('Multi-Provider AI Architecture & Fallback', () => {
       // Verify sticky fallback: next step stays on Gemini without switching back to Groq
       expect(getSession(sessionId).activeProvider).toBe('gemini');
     } finally {
+      ollamaProvider.isAvailable = origOllamaAvail;
       groqProvider.startSession = origStart;
       groqProvider.stepSession = origStep;
       geminiProvider.reconstructChat = origGeminiReconstruct;
@@ -173,6 +180,8 @@ describe('Multi-Provider AI Architecture & Fallback', () => {
   });
 
   it('safely pauses mission with friendly notification when all providers are unavailable', async () => {
+    const origOllamaAvail = ollamaProvider.isAvailable;
+    ollamaProvider.isAvailable = vi.fn().mockResolvedValue(false);
     const origGroqStart = groqProvider.startSession;
     const origGroqStep = groqProvider.stepSession;
     const origGeminiReconstruct = geminiProvider.reconstructChat;
@@ -185,7 +194,7 @@ describe('Multi-Provider AI Architecture & Fallback', () => {
       messages: []
     });
 
-    const startRes = await startAgentSession({ startPos: { row: 7, col: 1 } });
+    const startRes = await startAgentSession({ startPos: { row: 7, col: 1 }, forceProvider: 'groq' });
     const sessionId = startRes.data.sessionId;
 
     // Both fail on step
@@ -202,6 +211,7 @@ describe('Multi-Provider AI Architecture & Fallback', () => {
       expect(stepRes.data.allProvidersUnavailable).toBe(true);
       expect(stepRes.data.error).toContain('All AI providers are temporarily unavailable. Your mission is safely paused.');
     } finally {
+      ollamaProvider.isAvailable = origOllamaAvail;
       groqProvider.startSession = origGroqStart;
       groqProvider.stepSession = origGroqStep;
       geminiProvider.reconstructChat = origGeminiReconstruct;
@@ -214,7 +224,7 @@ describe('Multi-Provider AI Architecture & Fallback', () => {
 
     try {
       // 1. Live start
-      const startRes = await startAgentSession({ startPos: { row: 7, col: 1 } });
+      const startRes = await startAgentSession({ startPos: { row: 7, col: 1 }, forceProvider: 'groq' });
       if (startRes.status === 502 || startRes.status === 503) {
         // Rate limit reached on live Groq endpoint (e.g. TPD reset window)
         return;
@@ -249,5 +259,72 @@ describe('Multi-Provider AI Architecture & Fallback', () => {
       throw err;
     }
   }, 25000);
+
+  it('starts session with Local Ollama provider and normalizes function call', async () => {
+    const isAvail = await ollamaProvider.isAvailable();
+    if (!isAvail) return;
+
+    const startRes = await startAgentSession({ startPos: { row: 7, col: 1 }, forceProvider: 'ollama' });
+    expect(startRes.status).toBe(200);
+    expect(startRes.data.success).toBe(true);
+    expect(startRes.data.provider).toBe('ollama');
+    expect(startRes.data.model).toBe('qwen3:0.6b');
+    expect(['look', 'move', 'collect', 'unlock']).toContain(startRes.data.toolCall.name);
+
+    stopAgentSession(startRes.data.sessionId);
+  }, 20000);
+
+  it('performs live multi-turn function calling with Local Ollama Qwen3 0.6B', async () => {
+    const isAvail = await ollamaProvider.isAvailable();
+    if (!isAvail) return;
+
+    const startRes = await startAgentSession({ startPos: { row: 7, col: 1 }, forceProvider: 'ollama' });
+    expect(startRes.status).toBe(200);
+
+    const stepRes = await stepAgentSession({
+      sessionId: startRes.data.sessionId,
+      toolResponse: {
+        name: startRes.data.toolCall.name,
+        response: {
+          success: true,
+          current: { type: 'empty' },
+          surroundings: { north: 'wall', south: 'wall', east: 'empty', west: 'wall' }
+        }
+      }
+    });
+
+    expect(stepRes.status).toBe(200);
+    expect(stepRes.data.success).toBe(true);
+    expect(stepRes.data.provider).toBe('ollama');
+    expect(['look', 'move', 'collect', 'unlock']).toContain(stepRes.data.toolCall.name);
+
+    stopAgentSession(startRes.data.sessionId);
+  }, 20000);
+
+  it('automatically falls back from Ollama to Groq when Ollama start fails', async () => {
+    const origOllamaStart = ollamaProvider.startSession;
+    const origGroqStart = groqProvider.startSession;
+
+    ollamaProvider.startSession = vi.fn().mockRejectedValue(new Error('Ollama connection refused'));
+    groqProvider.startSession = vi.fn().mockResolvedValue({
+      model: 'openai/gpt-oss-20b',
+      toolCall: { name: 'look', args: {} },
+      thought: null,
+      rawCallId: 'call_fallback',
+      messages: []
+    });
+
+    try {
+      const res = await startAgentSession({ startPos: { row: 7, col: 1 } });
+      expect(res.status).toBe(200);
+      expect(res.data.success).toBe(true);
+      expect(res.data.fallbackFrom).toBe('Ollama');
+      expect(res.data.provider).toBe('groq');
+      expect(res.data.toolCall.name).toBe('look');
+    } finally {
+      ollamaProvider.startSession = origOllamaStart;
+      groqProvider.startSession = origGroqStart;
+    }
+  });
 });
 

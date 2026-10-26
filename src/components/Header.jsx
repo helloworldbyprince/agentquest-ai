@@ -62,7 +62,7 @@ export function Header({
 
       if (response.ok && data.success) {
         setAiStatus('connected');
-        const providerName = data.provider === 'groq' ? 'Groq' : 'Gemini';
+        const providerName = data.provider === 'ollama' ? 'Local Ollama' : data.provider === 'groq' ? 'Groq' : 'Gemini';
         const fallbackNote = data.fallbackFrom ? ` (Auto-fallback from ${data.fallbackFrom})` : '';
         setTestResult({
           loading: false,

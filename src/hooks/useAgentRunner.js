@@ -124,9 +124,12 @@ export function useAgentRunner({
     setActiveModel(modelName);
 
     // Friendly Activity Log: PROVIDER SELECTED
-    const providerLabel = providerName === 'groq'
-      ? `Groq — ${modelName.includes('/') ? modelName.split('/')[1].toUpperCase() : modelName}`
-      : `Gemini — ${modelName}`;
+    let providerLabel = `Gemini — ${modelName}`;
+    if (providerName === 'ollama') {
+      providerLabel = 'Local AI — Qwen3 0.6B';
+    } else if (providerName === 'groq') {
+      providerLabel = `Groq — ${modelName.includes('/') ? modelName.split('/')[1].toUpperCase() : modelName}`;
+    }
 
     currentState = {
       ...currentState,
@@ -184,9 +187,10 @@ export function useAgentRunner({
 
       // Log AI DECISION
       const argSummary = nextToolCall.args ? JSON.stringify(nextToolCall.args) : '';
+      const providerTitle = providerName === 'ollama' ? 'Local AI' : providerName === 'groq' ? 'Groq' : 'Gemini';
       const decisionLog = createLogEntry(
         LOG_TYPES.AI_RESPONSE,
-        `${providerName === 'groq' ? 'Groq' : 'Gemini'} decided: ${nextToolCall.name}(${argSummary})`,
+        `${providerTitle} decided: ${nextToolCall.name}(${argSummary})`,
         { tool: nextToolCall.name, status: 'info', payload: nextToolCall, provider: providerName }
       );
 
