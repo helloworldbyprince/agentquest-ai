@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Bot, RotateCcw, Sparkles, Loader2, CheckCircle2, AlertCircle, X } from 'lucide-react';
+import { apiFetch, safeJson } from '../utils/api.js';
 
 export function Header({
   gameMode = 'manual',
@@ -11,6 +12,38 @@ export function Header({
   const [aiStatus, setAiStatus] = useState('not_connected'); // 'not_connected' | 'connecting' | 'connected' | 'failed'
   const [testResult, setTestResult] = useState(null);
 
+  // Auto-check connection on load
+  useEffect(() => {
+    let isMounted = true;
+    apiFetch('/api/health')
+      .then((res) => safeJson(res))
+      .then((data) => {
+        if (isMounted && data.status === 'ok') {
+          // Backend is running, verify Gemini key status
+          apiFetch('/api/gemini/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+          })
+            .then((res) => safeJson(res))
+            .then((geminiData) => {
+              if (isMounted) {
+                if (geminiData.success) {
+                  setAiStatus('connected');
+                } else {
+                  setAiStatus('failed');
+                }
+              }
+            })
+            .catch(() => {});
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   const handleTestConnection = async () => {
     setAiStatus('connecting');
     setTestResult({
@@ -20,34 +53,12 @@ export function Header({
     });
 
     try {
-      let response;
-      try {
-        response = await fetch('/api/gemini/test', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
-        });
+      const response = await apiFetch('/api/gemini/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
 
-        // Fallback to direct backend if proxy is inactive or returning gateway/server errors
-        if (!response.ok && response.status >= 500) {
-          try {
-            const fallbackResponse = await fetch('http://localhost:3001/api/gemini/test', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' }
-            });
-            response = fallbackResponse;
-          } catch {
-            // Keep original response
-          }
-        }
-      } catch {
-        // Network error on /api, try direct backend port
-        response = await fetch('http://localhost:3001/api/gemini/test', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-
-      const data = await response.json();
+      const data = await safeJson(response);
 
       if (response.ok && data.success) {
         setAiStatus('connected');

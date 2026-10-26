@@ -6,6 +6,7 @@ import {
   LOG_TYPES,
   MISSION_STATUS
 } from '../game/engine.js';
+import { apiFetch, safeJson } from '../utils/api.js';
 
 export const AGENT_SPEEDS = {
   slow: { id: 'slow', label: 'Slow (1.2s)', ms: 1200 },
@@ -80,7 +81,7 @@ export function useAgentRunner({
     // 2. Initialize Gemini session on the backend
     let sessionData = null;
     try {
-      const response = await fetch('/api/agent/session/start', {
+      const response = await apiFetch('/api/agent/session/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -88,7 +89,7 @@ export function useAgentRunner({
         })
       });
 
-      sessionData = await response.json();
+      sessionData = await safeJson(response);
 
       if (!response.ok || !sessionData.success) {
         throw new Error(sessionData.error || 'Failed to start Gemini agent session.');
@@ -187,7 +188,7 @@ export function useAgentRunner({
 
       // Send actual engine tool result back to Gemini
       try {
-        const stepResponse = await fetch('/api/agent/session/step', {
+        const stepResponse = await apiFetch('/api/agent/session/step', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -199,7 +200,7 @@ export function useAgentRunner({
           })
         });
 
-        const stepData = await stepResponse.json();
+        const stepData = await safeJson(stepResponse);
 
         if (!stepResponse.ok || !stepData.success) {
           throw new Error(stepData.error || 'Agent step returned an error.');
@@ -280,7 +281,7 @@ export function useAgentRunner({
 
     const currentId = controlRef.current.sessionId;
     if (currentId) {
-      fetch('/api/agent/session/stop', {
+      apiFetch('/api/agent/session/stop', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId: currentId })
