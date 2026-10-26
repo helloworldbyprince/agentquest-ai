@@ -226,12 +226,6 @@ export class OllamaProvider {
       }
     }
 
-    // 2. If tool is look, but the robot just moved successfully forward, continue moving forward!
-    if (toolName === 'look' && lastObs?.facing && !lastObs?.blockedReason) {
-      toolName = 'move';
-      direction = lastObs.facing;
-    }
-
     // If still no tool resolved, default to move if open directions available, otherwise look
     if (!toolName) {
       if (lastObs?.surroundings) {
@@ -334,13 +328,13 @@ export class OllamaProvider {
         obsSummary += `No open path forward. Backtrack or select move direction.`;
       }
     } else if (toolResponse.name === 'move' && rawResp.success) {
-      obsSummary += `Movement in direction "${obs.facing}" succeeded. Corridor is open. CONTINUE MOVING forward along the path. Do NOT call look(). Reply with: {"tool": "move", "arguments": {"direction": "${obs.facing}"}}`;
+      obsSummary += `Robot moved to (${currPos.row}, ${currPos.col}). Tile: ${obs.tileType || 'empty'}. Select next tool (look, move, collect, unlock):`;
     } else if (rawResp.success === false && rawResp.warning) {
       obsSummary += `${rawResp.warning} `;
     } else if (rawResp.success === false && rawResp.guidance) {
       obsSummary += `${rawResp.guidance} `;
     } else {
-      obsSummary += `Select next tool: move, collect, unlock. Reply with valid JSON.`;
+      obsSummary += `Select next tool: move, look, collect, unlock. Reply with valid JSON.`;
     }
 
     // Keep memory footprint bounded: retain system prompt + last 4 turns

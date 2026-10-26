@@ -186,6 +186,9 @@ export async function startAgentSession({
     },
     visitedPositions: new Set([startCoord]),
     discoveredWalls: new Set(),
+    lastPos: null,
+    hasKey: false,
+    doorUnlocked: false,
     recentActions: [],
     repeatedBlockedCount: 0,
     authoritativeHistory: [],
@@ -233,6 +236,21 @@ function enrichToolResponse(session, toolResponse) {
   if (obs.position) {
     session.currentPos = { row: obs.position.row, col: obs.position.col };
     session.visitedPositions.add(`${obs.position.row},${obs.position.col}`);
+  }
+
+  // Track inventory, door state, and last position
+  if (toolName === 'collect' && rawResp.success) {
+    session.hasKey = true;
+    session.visitedPositions.clear();
+    session.lastPos = null;
+  }
+  if (toolName === 'unlock' && rawResp.success) {
+    session.doorUnlocked = true;
+    session.visitedPositions.clear();
+    session.lastPos = null;
+  }
+  if (toolName === 'move' && rawResp.success && obs.from) {
+    session.lastPos = { row: obs.from.row, col: obs.from.col };
   }
 
   // Track discovered walls from blocked moves
@@ -599,23 +617,9 @@ export async function stepAgentSession({
       };
       stepResult.thought = `Surroundings already inspected. Advancing ${chosenDir} into open corridor.`;
     }
-  } else if (
-    stepResult.toolCall?.name === 'look' &&
-    enrichedToolResponse.name === 'move' &&
-    enrichedToolResponse.response?.success &&
-    enrichedToolResponse.response?.observation?.facing
-  ) {
-    const forwardDir = enrichedToolResponse.response.observation.facing;
-    stepResult.toolCall = {
-      name: 'move',
-      args: { direction: forwardDir }
-    };
-    stepResult.thought = `Corridor is open. Continuing ${forwardDir} without redundant look().`;
   }
 
-  // Universal Anti-Oscillation Protection:
-  // If the agent decides to move into an ALREADY-VISITED tile (backtracking),
-  // but there is an UNEXPLORED open direction available, prioritize exploring the unvisited path!
+  // Universal Anti-Oscillation & Dead-End Protection:
   if (stepResult.toolCall?.name === 'move' && stepResult.toolCall?.args?.direction) {
     const chosenDir = stepResult.toolCall.args.direction.toLowerCase();
     const deltaMap = { north: [-1, 0], south: [1, 0], east: [0, 1], west: [0, -1] };
@@ -629,15 +633,16 @@ export async function stepAgentSession({
 
       // Check if there are unvisited open directions known from surroundings
       const surroundings = enrichedToolResponse.response?.observation?.surroundings || {};
-      const unexploredDirs = Object.entries(surroundings)
-        .filter(([dir, info]) => {
-          if (!info || !info.traversable) return false;
-          const d = deltaMap[dir];
-          if (!d) return false;
-          return !session.visitedPositions.has(`${curr.row + d[0]},${curr.col + d[1]}`);
-        })
+      const openDirs = Object.entries(surroundings)
+        .filter(([dir, info]) => info && info.traversable)
         .map(([dir]) => dir);
 
+      const unexploredDirs = openDirs.filter((dir) => {
+        const d = deltaMap[dir];
+        return !session.visitedPositions.has(`${curr.row + d[0]},${curr.col + d[1]}`);
+      });
+
+      // Case 1: An unexplored corridor exists, but model chose a visited tile -> prioritize unexplored!
       if (isTargetVisited && unexploredDirs.length > 0 && !unexploredDirs.includes(chosenDir)) {
         const betterDir = unexploredDirs[0];
         stepResult.toolCall = {
@@ -645,6 +650,24 @@ export async function stepAgentSession({
           args: { direction: betterDir }
         };
         stepResult.thought = `Prevented backtracking to visited tile (${targetR}, ${targetC}). Exploring unvisited open path ${betterDir}.`;
+      }
+      // Case 2: In a dead end or backtrack corridor (no unexplored neighbors) -> DO NOT re-enter lastPos!
+      else if (unexploredDirs.length === 0 && session.lastPos && openDirs.length > 1) {
+        const isReenteringLastPos = targetR === session.lastPos.row && targetC === session.lastPos.col;
+        if (isReenteringLastPos) {
+          const validBacktrack = openDirs.filter((d) => {
+            const dt = deltaMap[d];
+            return curr.row + dt[0] !== session.lastPos.row || curr.col + dt[1] !== session.lastPos.col;
+          });
+          if (validBacktrack.length > 0) {
+            const betterDir = validBacktrack[0];
+            stepResult.toolCall = {
+              name: 'move',
+              args: { direction: betterDir }
+            };
+            stepResult.thought = `Prevented reversing back into dead-end (${session.lastPos.row}, ${session.lastPos.col}). Backtracking along ${betterDir}.`;
+          }
+        }
       }
     }
   }
