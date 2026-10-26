@@ -599,6 +599,54 @@ export async function stepAgentSession({
       };
       stepResult.thought = `Surroundings already inspected. Advancing ${chosenDir} into open corridor.`;
     }
+  } else if (
+    stepResult.toolCall?.name === 'look' &&
+    enrichedToolResponse.name === 'move' &&
+    enrichedToolResponse.response?.success &&
+    enrichedToolResponse.response?.observation?.facing
+  ) {
+    const forwardDir = enrichedToolResponse.response.observation.facing;
+    stepResult.toolCall = {
+      name: 'move',
+      args: { direction: forwardDir }
+    };
+    stepResult.thought = `Corridor is open. Continuing ${forwardDir} without redundant look().`;
+  }
+
+  // Universal Anti-Oscillation Protection:
+  // If the agent decides to move into an ALREADY-VISITED tile (backtracking),
+  // but there is an UNEXPLORED open direction available, prioritize exploring the unvisited path!
+  if (stepResult.toolCall?.name === 'move' && stepResult.toolCall?.args?.direction) {
+    const chosenDir = stepResult.toolCall.args.direction.toLowerCase();
+    const deltaMap = { north: [-1, 0], south: [1, 0], east: [0, 1], west: [0, -1] };
+    const curr = session.currentPos || session.startPos || { row: 7, col: 1 };
+
+    const chosenDelta = deltaMap[chosenDir];
+    if (chosenDelta) {
+      const targetR = curr.row + chosenDelta[0];
+      const targetC = curr.col + chosenDelta[1];
+      const isTargetVisited = session.visitedPositions.has(`${targetR},${targetC}`);
+
+      // Check if there are unvisited open directions known from surroundings
+      const surroundings = enrichedToolResponse.response?.observation?.surroundings || {};
+      const unexploredDirs = Object.entries(surroundings)
+        .filter(([dir, info]) => {
+          if (!info || !info.traversable) return false;
+          const d = deltaMap[dir];
+          if (!d) return false;
+          return !session.visitedPositions.has(`${curr.row + d[0]},${curr.col + d[1]}`);
+        })
+        .map(([dir]) => dir);
+
+      if (isTargetVisited && unexploredDirs.length > 0 && !unexploredDirs.includes(chosenDir)) {
+        const betterDir = unexploredDirs[0];
+        stepResult.toolCall = {
+          name: 'move',
+          args: { direction: betterDir }
+        };
+        stepResult.thought = `Prevented backtracking to visited tile (${targetR}, ${targetC}). Exploring unvisited open path ${betterDir}.`;
+      }
+    }
   }
 
   // 5. Update session state

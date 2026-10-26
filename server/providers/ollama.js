@@ -10,9 +10,11 @@ Available tools:
 - unlock(): unlock door when adjacent and holding key
 
 Strategy:
-- If surroundings are known, MOVE towards an open direction. Never call look() twice from the same spot.
-- Move towards open tiles to explore and find the key.
-- Avoid moving into walls.
+- Call look() ONCE at the start to find the open corridor. Once called, you DO NOT need to call look() again while moving.
+- KEEP MOVING (move) continuously along open corridors. Do NOT call look() after every step.
+- Only call look() if you are completely blocked by a wall and need to check surrounding tiles.
+- When on the golden key tile, call collect().
+- When adjacent to the locked door with the key, call unlock().
 
 Reply with valid JSON only. Never output commentary.
 Format:
@@ -212,7 +214,8 @@ export class OllamaProvider {
       if (dirMatch) direction = dirMatch[1].toLowerCase();
     }
 
-    // Anti-loop protection: If tool is look, but last observation already has open surroundings, pick move!
+    // Anti-loop & anti-redundant look protection:
+    // 1. If tool is look, but last observation already has open surroundings, pick move!
     if (toolName === 'look' && lastObs?.surroundings) {
       const openDirs = Object.entries(lastObs.surroundings)
         .filter(([_, info]) => info && info.traversable)
@@ -221,6 +224,12 @@ export class OllamaProvider {
         toolName = 'move';
         direction = direction && openDirs.includes(direction.toLowerCase()) ? direction.toLowerCase() : openDirs[0];
       }
+    }
+
+    // 2. If tool is look, but the robot just moved successfully forward, continue moving forward!
+    if (toolName === 'look' && lastObs?.facing && !lastObs?.blockedReason) {
+      toolName = 'move';
+      direction = lastObs.facing;
     }
 
     // If still no tool resolved, default to move if open directions available, otherwise look
@@ -324,12 +333,14 @@ export class OllamaProvider {
       } else {
         obsSummary += `No open path forward. Backtrack or select move direction.`;
       }
+    } else if (toolResponse.name === 'move' && rawResp.success) {
+      obsSummary += `Movement in direction "${obs.facing}" succeeded. Corridor is open. CONTINUE MOVING forward along the path. Do NOT call look(). Reply with: {"tool": "move", "arguments": {"direction": "${obs.facing}"}}`;
     } else if (rawResp.success === false && rawResp.warning) {
       obsSummary += `${rawResp.warning} `;
     } else if (rawResp.success === false && rawResp.guidance) {
       obsSummary += `${rawResp.guidance} `;
     } else {
-      obsSummary += `Select next tool: move, look, collect, unlock. Reply with valid JSON.`;
+      obsSummary += `Select next tool: move, collect, unlock. Reply with valid JSON.`;
     }
 
     // Keep memory footprint bounded: retain system prompt + last 4 turns
