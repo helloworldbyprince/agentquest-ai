@@ -23,7 +23,7 @@ export function StatusPanel({
   stats,
   validation,
   gameMode = 'manual',
-  agentSpeed = AGENT_SPEEDS.normal.ms,
+  agentSpeed = AGENT_SPEEDS.fast.ms,
   onSpeedChange,
   isAgentBusy = false,
   activeProvider = 'groq',

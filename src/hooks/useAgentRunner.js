@@ -9,9 +9,10 @@ import {
 import { apiFetch, safeJson } from '../utils/api.js';
 
 export const AGENT_SPEEDS = {
-  slow: { id: 'slow', label: 'Slow (1.2s)', ms: 1200 },
-  normal: { id: 'normal', label: 'Normal (0.7s)', ms: 700 },
-  fast: { id: 'fast', label: 'Fast (0.25s)', ms: 250 }
+  slow: { id: 'slow', label: 'Slow (0.4s)', ms: 400 },
+  normal: { id: 'normal', label: 'Normal (100ms)', ms: 100 },
+  fast: { id: 'fast', label: 'Fast (20ms)', ms: 20 },
+  instant: { id: 'instant', label: 'Instant (0ms)', ms: 0 }
 };
 
 export function useAgentRunner({
@@ -19,7 +20,7 @@ export function useAgentRunner({
   setGameState,
   selectedPresetId
 }) {
-  const [speed, setSpeed] = useState(AGENT_SPEEDS.normal.ms);
+  const [speed, setSpeed] = useState(AGENT_SPEEDS.fast.ms);
   const [isAgentBusy, setIsAgentBusy] = useState(false);
   const [sessionId, setSessionId] = useState(null);
   const [activeProvider, setActiveProvider] = useState('groq');
@@ -257,8 +258,10 @@ export function useAgentRunner({
         setGameState(currentState);
       }
 
-      // Visual Playback Delay between steps
-      await sleep(speed);
+      // Visual Playback Delay between steps (skipped if 0ms)
+      if (speed > 0) {
+        await sleep(speed);
+      }
       await checkPause();
       if (controlRef.current.isStopped) break;
 
