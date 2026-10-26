@@ -45,7 +45,6 @@ export function App() {
 
   // Timer interval for elapsed time when active
   useEffect(() => {
-    let interval = null;
     const isMissionActive = [
       MISSION_STATUS.RUNNING,
       MISSION_STATUS.EXPLORING,
@@ -53,20 +52,24 @@ export function App() {
       MISSION_STATUS.WAITING_AI
     ].includes(gameState.status);
 
-    if (isMissionActive) {
-      interval = setInterval(() => {
-        setGameState((prev) => ({
+    if (!isMissionActive) return;
+
+    const interval = setInterval(() => {
+      setGameState((prev) => {
+        if (!prev.stats.startTime) return prev;
+        const elapsed = Math.floor((Date.now() - prev.stats.startTime) / 1000);
+        if (prev.stats.elapsedSeconds === elapsed) return prev;
+        return {
           ...prev,
           stats: {
             ...prev.stats,
-            elapsedSeconds: prev.stats.elapsedSeconds + 1
+            elapsedSeconds: elapsed
           }
-        }));
-      }, 1000);
-    }
-    return () => {
-      if (interval) clearInterval(interval);
-    };
+        };
+      });
+    }, 500);
+
+    return () => clearInterval(interval);
   }, [gameState.status]);
 
   // Tool Call Handler (Manual UI and Keyboard trigger this same handler)
@@ -100,11 +103,17 @@ export function App() {
   const handleStartMission = useCallback(() => {
     if (!gameState.validation.isValid) return;
     setIsEditMode(false);
-    setGameState((prev) => ({
-      ...createInitialState(prev.presetId, prev.grid),
-      status: MISSION_STATUS.RUNNING
-    }));
-  }, [gameState.validation.isValid]);
+    const startState = createInitialState(selectedPresetId, gameState.grid);
+    setGameState({
+      ...startState,
+      status: MISSION_STATUS.RUNNING,
+      stats: {
+        ...startState.stats,
+        startTime: Date.now(),
+        elapsedSeconds: 0
+      }
+    });
+  }, [gameState.validation.isValid, selectedPresetId, gameState.grid]);
 
   // Mission Pause
   const handlePauseMission = useCallback(() => {

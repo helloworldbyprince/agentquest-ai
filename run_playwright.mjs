@@ -55,7 +55,10 @@ async function runBrowserAgentTest() {
       const callsMatch = bodyText.match(/(\d+)\s*\/\s*100/);
       const callsStr = callsMatch ? callsMatch[1] : '?';
 
-      console.log(`[Second ${sec}] Status: "${statusText}" | Position: ${posStr} | Actions: ${callsStr}/100`);
+      const timeMatch = bodyText.match(/\b(\d{2}:\d{2})\b/);
+      const timeStr = timeMatch ? timeMatch[1] : '00:00';
+
+      console.log(`[Second ${sec}] Status: "${statusText}" | Position: ${posStr} | Actions: ${callsStr}/100 | UI Time: ${timeStr}`);
 
       if (isCompleted) {
         missionResult = 'COMPLETED';

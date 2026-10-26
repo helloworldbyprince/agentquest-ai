@@ -55,11 +55,23 @@ export function useAgentRunner({
     if (!gameState.validation.isValid) return;
 
     // Reset control ref
+    const startTime = Date.now();
     controlRef.current = {
       isPaused: false,
       isStopped: false,
       resumeResolver: null,
-      sessionId: null
+      sessionId: null,
+      startTime,
+      totalPausedMs: 0,
+      pauseStartTime: null
+    };
+
+    const getElapsed = () => {
+      const s = controlRef.current.startTime || startTime;
+      const pausedMs = controlRef.current.totalPausedMs || 0;
+      const pauseStart = controlRef.current.pauseStartTime;
+      const now = pauseStart ? pauseStart : Date.now();
+      return Math.max(0, Math.floor((now - s - pausedMs) / 1000));
     };
 
     setIsAgentBusy(true);
@@ -67,7 +79,12 @@ export function useAgentRunner({
     // 1. Initialize clean state at starting position
     const freshState = {
       ...createInitialState(selectedPresetId, gameState.grid),
-      status: MISSION_STATUS.RUNNING
+      status: MISSION_STATUS.RUNNING,
+      stats: {
+        ...createInitialState(selectedPresetId, gameState.grid).stats,
+        startTime,
+        elapsedSeconds: 0
+      }
     };
 
     // Add AGENT_STARTED log
@@ -185,13 +202,18 @@ export function useAgentRunner({
         break;
       }
 
+      // Update accurate elapsed time
+      const currentElapsed = getElapsed();
+      currentState.stats.elapsedSeconds = currentElapsed;
+      currentState.stats.startTime = startTime;
+
       // Log AI DECISION
       const argSummary = nextToolCall.args ? JSON.stringify(nextToolCall.args) : '';
       const providerTitle = providerName === 'ollama' ? 'Local AI' : providerName === 'groq' ? 'Groq' : 'Gemini';
       const decisionLog = createLogEntry(
         LOG_TYPES.AI_RESPONSE,
         `${providerTitle} decided: ${nextToolCall.name}(${argSummary})`,
-        { tool: nextToolCall.name, status: 'info', payload: nextToolCall, provider: providerName }
+        { tool: nextToolCall.name, status: 'info', payload: nextToolCall, provider: providerName, elapsedSeconds: currentElapsed }
       );
 
       // Execute tool call on authoritative game engine
@@ -236,11 +258,17 @@ export function useAgentRunner({
         };
         setGameState(currentState);
         controlRef.current.isPaused = true;
+        controlRef.current.pauseStartTime = Date.now();
         setIsAgentBusy(false);
 
         // Wait for user to resume
         await checkPause();
         if (controlRef.current.isStopped) break;
+        if (controlRef.current.pauseStartTime) {
+          controlRef.current.totalPausedMs =
+            (controlRef.current.totalPausedMs || 0) + (Date.now() - controlRef.current.pauseStartTime);
+          controlRef.current.pauseStartTime = null;
+        }
         setIsAgentBusy(true);
 
         // Expand budget by +50 actions
@@ -308,11 +336,17 @@ export function useAgentRunner({
               };
               setGameState(currentState);
               controlRef.current.isPaused = true;
+              controlRef.current.pauseStartTime = Date.now();
               setIsAgentBusy(false);
 
               // Wait until user clicks "Resume Agent"
               await checkPause();
               if (controlRef.current.isStopped) break;
+              if (controlRef.current.pauseStartTime) {
+                controlRef.current.totalPausedMs =
+                  (controlRef.current.totalPausedMs || 0) + (Date.now() - controlRef.current.pauseStartTime);
+                controlRef.current.pauseStartTime = null;
+              }
               setIsAgentBusy(true);
 
               setMaxActionBudget((prev) => prev + 50);
@@ -335,11 +369,17 @@ export function useAgentRunner({
               };
               setGameState(currentState);
               controlRef.current.isPaused = true;
+              controlRef.current.pauseStartTime = Date.now();
               setIsAgentBusy(false);
 
               // Wait until user clicks "Resume Agent"
               await checkPause();
               if (controlRef.current.isStopped) break;
+              if (controlRef.current.pauseStartTime) {
+                controlRef.current.totalPausedMs =
+                  (controlRef.current.totalPausedMs || 0) + (Date.now() - controlRef.current.pauseStartTime);
+                controlRef.current.pauseStartTime = null;
+              }
               setIsAgentBusy(true);
               continue;
             }
@@ -439,6 +479,7 @@ export function useAgentRunner({
    */
   const pauseAgent = useCallback(() => {
     controlRef.current.isPaused = true;
+    controlRef.current.pauseStartTime = Date.now();
     setGameState((prev) => ({
       ...prev,
       status: MISSION_STATUS.PAUSED
@@ -450,6 +491,11 @@ export function useAgentRunner({
    */
   const resumeAgent = useCallback(() => {
     controlRef.current.isPaused = false;
+    if (controlRef.current.pauseStartTime) {
+      controlRef.current.totalPausedMs =
+        (controlRef.current.totalPausedMs || 0) + (Date.now() - controlRef.current.pauseStartTime);
+      controlRef.current.pauseStartTime = null;
+    }
     if (controlRef.current.resumeResolver) {
       controlRef.current.resumeResolver();
     }

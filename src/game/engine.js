@@ -169,10 +169,14 @@ export function dispatchToolCall(state, toolName, ...args) {
     callText = `${toolName}(${JSON.stringify(args[0])})`;
   }
 
+  const elapsed = state.stats?.startTime
+    ? Math.floor((Date.now() - state.stats.startTime) / 1000)
+    : (state.stats?.elapsedSeconds || 0);
+
   const callLog = createLogEntry(LOG_TYPES.TOOL_CALL, callText, {
     tool: toolName,
     status: 'info',
-    elapsedSeconds: state.stats.elapsedSeconds
+    elapsedSeconds: elapsed
   });
 
   // 2. Execute the tool function
@@ -203,7 +207,6 @@ export function dispatchToolCall(state, toolName, ...args) {
 
   // 3. Construct resulting logs
   const newLogs = [callLog];
-  const elapsed = state.stats.elapsedSeconds;
 
   const resultLog = createLogEntry(
     result.success ? LOG_TYPES.ACTION_SUCCESS : LOG_TYPES.ACTION_FAILED,
@@ -288,6 +291,7 @@ export function dispatchToolCall(state, toolName, ...args) {
     lastToolResult: result,
     stats: {
       ...state.stats,
+      elapsedSeconds: elapsed,
       toolCalls: state.stats.toolCalls + 1,
       successfulActions: state.stats.successfulActions + (result.success ? 1 : 0),
       failedActions: state.stats.failedActions + (result.success ? 0 : 1)
