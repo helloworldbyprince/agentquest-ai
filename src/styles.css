@@ -1166,8 +1166,20 @@ button {
 .status-running { background: #E0F2FE; color: #0284C7; }
 .status-running .status-dot { background: #0284C7; box-shadow: 0 0 6px rgba(2, 132, 199, 0.6); }
 
+.status-exploring { background: #E0F2FE; color: #0369A1; }
+.status-exploring .status-dot { background: #0284C7; box-shadow: 0 0 6px rgba(2, 132, 199, 0.6); }
+
+.status-replanning { background: #FFF7ED; color: #C2410C; }
+.status-replanning .status-dot { background: #EA580C; box-shadow: 0 0 6px rgba(234, 88, 12, 0.6); }
+
+.status-waiting_ai { background: #F3E8FF; color: #7E22CE; }
+.status-waiting_ai .status-dot { background: #9333EA; box-shadow: 0 0 6px rgba(147, 51, 234, 0.6); }
+
 .status-paused { background: #FEF3C7; color: #D97706; }
 .status-paused .status-dot { background: #D97706; }
+
+.status-limit_reached { background: #FEF3C7; color: #B45309; }
+.status-limit_reached .status-dot { background: #D97706; }
 
 .status-completed { background: var(--mint-bg); color: var(--mint-text); }
 .status-completed .status-dot { background: #10B981; }

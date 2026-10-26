@@ -32,6 +32,7 @@ export function App() {
     isAgentBusy,
     activeProvider,
     activeModel,
+    maxActionBudget,
     startAgent,
     pauseAgent,
     resumeAgent,
@@ -42,10 +43,17 @@ export function App() {
     selectedPresetId
   });
 
-  // Timer interval for elapsed time when running
+  // Timer interval for elapsed time when active
   useEffect(() => {
     let interval = null;
-    if (gameState.status === MISSION_STATUS.RUNNING) {
+    const isMissionActive = [
+      MISSION_STATUS.RUNNING,
+      MISSION_STATUS.EXPLORING,
+      MISSION_STATUS.REPLANNING,
+      MISSION_STATUS.WAITING_AI
+    ].includes(gameState.status);
+
+    if (isMissionActive) {
       interval = setInterval(() => {
         setGameState((prev) => ({
           ...prev,
@@ -246,6 +254,7 @@ export function App() {
             isAgentBusy={isAgentBusy}
             activeProvider={activeProvider}
             activeModel={activeModel}
+            maxActionBudget={maxActionBudget}
             onStart={handleStartMission}
             onPause={handlePauseMission}
             onResume={handleResumeMission}

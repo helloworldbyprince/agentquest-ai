@@ -24,6 +24,7 @@ export function useAgentRunner({
   const [sessionId, setSessionId] = useState(null);
   const [activeProvider, setActiveProvider] = useState('groq');
   const [activeModel, setActiveModel] = useState('openai/gpt-oss-20b');
+  const [maxActionBudget, setMaxActionBudget] = useState(100);
 
   // Control refs for non-stale access inside async loop
   const controlRef = useRef({
@@ -198,10 +199,16 @@ export function useAgentRunner({
 
       currentState = {
         ...currentState,
+        status: MISSION_STATUS.EXPLORING,
         logs: [...currentState.logs, decisionLog]
       };
 
       currentState = dispatchToolCall(currentState, toolName, ...toolArgs);
+      
+      // If move failed, show replanning status
+      if (!currentState.lastToolResult?.success) {
+        currentState.status = MISSION_STATUS.REPLANNING;
+      }
       setGameState(currentState);
 
       // Check Mission Completion
@@ -209,26 +216,57 @@ export function useAgentRunner({
         break;
       }
 
-      // Check Safety Limit (80 tool calls)
-      if (currentState.stats.toolCalls >= 80) {
+      // Check Action Budget (default 100 game actions, safely pauses with resume option)
+      let currentBudget = maxActionBudget;
+      if (currentState.stats.toolCalls >= currentBudget) {
         const limitLog = createLogEntry(
-          LOG_TYPES.MISSION_FAILED,
-          'Safety limit reached: 80 tool calls completed without escaping.',
-          { status: 'failure' }
+          LOG_TYPES.LIMIT_REACHED,
+          `Action budget reached (${currentBudget} actions). Mission safely paused. Click Resume Agent to continue (+50 actions).`,
+          { status: 'warning' }
         );
         currentState = {
           ...currentState,
-          status: MISSION_STATUS.FAILED,
+          status: MISSION_STATUS.LIMIT_REACHED,
           logs: [...currentState.logs, limitLog]
         };
         setGameState(currentState);
-        break;
+        controlRef.current.isPaused = true;
+        setIsAgentBusy(false);
+
+        // Wait for user to resume
+        await checkPause();
+        if (controlRef.current.isStopped) break;
+        setIsAgentBusy(true);
+
+        // Expand budget by +50 actions
+        currentBudget += 50;
+        setMaxActionBudget(currentBudget);
+
+        currentState = {
+          ...currentState,
+          status: MISSION_STATUS.RUNNING,
+          logs: [
+            ...currentState.logs,
+            createLogEntry(
+              LOG_TYPES.MISSION_CONTINUED,
+              `Action budget expanded to ${currentBudget} actions. Exploration resuming.`,
+              { status: 'info' }
+            )
+          ]
+        };
+        setGameState(currentState);
       }
 
       // Visual Playback Delay between steps
       await sleep(speed);
       await checkPause();
       if (controlRef.current.isStopped) break;
+
+      // Update status to waiting for AI
+      setGameState((prev) => ({
+        ...prev,
+        status: MISSION_STATUS.WAITING_AI
+      }));
 
       // Send actual engine tool result back to active AI Provider
       let stepCompleted = false;
@@ -302,6 +340,22 @@ export function useAgentRunner({
                   LOG_TYPES.MISSION_CONTINUED,
                   'Previous maze progress preserved.',
                   { status: 'success' }
+                )
+              ]
+            };
+            setGameState(currentState);
+          }
+
+          // Check if repeated unproductive action was warned
+          if (stepData.repeatedBlockedCount > 0) {
+            currentState = {
+              ...currentState,
+              logs: [
+                ...currentState.logs,
+                createLogEntry(
+                  LOG_TYPES.REPEATED_ACTION_WARNED,
+                  `Loop Warning: Attempting "${toolName}" was blocked again. Choosing alternative route.`,
+                  { status: 'warning' }
                 )
               ]
             };
@@ -406,6 +460,8 @@ export function useAgentRunner({
     sessionId,
     activeProvider,
     activeModel,
+    maxActionBudget,
+    setMaxActionBudget,
     startAgent,
     pauseAgent,
     resumeAgent,

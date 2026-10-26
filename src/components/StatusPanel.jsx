@@ -28,6 +28,7 @@ export function StatusPanel({
   isAgentBusy = false,
   activeProvider = 'groq',
   activeModel = 'openai/gpt-oss-20b',
+  maxActionBudget = 100,
   onStart,
   onPause,
   onResume,
@@ -38,10 +39,21 @@ export function StatusPanel({
   onStopAgent
 }) {
   const isReady = status === MISSION_STATUS.READY;
-  const isRunning = status === MISSION_STATUS.RUNNING;
+  const isExploring = status === MISSION_STATUS.EXPLORING;
+  const isReplanning = status === MISSION_STATUS.REPLANNING;
+  const isWaitingAI = status === MISSION_STATUS.WAITING_AI;
+  const isRunning = status === MISSION_STATUS.RUNNING || isExploring || isReplanning || isWaitingAI;
   const isPaused = status === MISSION_STATUS.PAUSED;
+  const isLimitReached = status === MISSION_STATUS.LIMIT_REACHED;
   const isCompleted = status === MISSION_STATUS.COMPLETED;
   const isFailed = status === MISSION_STATUS.FAILED;
+
+  let displayStatus = status.toUpperCase();
+  if (isExploring) displayStatus = 'EXPLORING';
+  else if (isReplanning) displayStatus = 'REPLANNING';
+  else if (isWaitingAI) displayStatus = 'WAITING FOR AI';
+  else if (isLimitReached) displayStatus = 'LIMIT REACHED';
+  else if (status === MISSION_STATUS.RUNNING) displayStatus = 'RUNNING';
 
   const mins = Math.floor(stats.elapsedSeconds / 60)
     .toString()
@@ -72,7 +84,7 @@ export function StatusPanel({
         </div>
         <div className={`status-pill status-${status}`}>
           <span className="status-dot"></span>
-          <span className="status-text">{status.toUpperCase()}</span>
+          <span className="status-text">{displayStatus}</span>
         </div>
       </div>
 
@@ -130,10 +142,10 @@ export function StatusPanel({
         <div className="stat-box">
           <div className="stat-label">
             <Activity size={14} className="text-indigo-500" />
-            <span>Tool Calls</span>
+            <span>Actions Budget</span>
           </div>
           <div className="stat-value">
-            {stats.toolCalls}
+            {stats.toolCalls} / {maxActionBudget}
             <span className="stat-sub-counts">
               (<span className="text-emerald-600">{stats.successfulActions}</span> /{' '}
               <span className="text-rose-500">{stats.failedActions}</span>)
@@ -212,15 +224,15 @@ export function StatusPanel({
               </div>
             )}
 
-            {isPaused && (
+            {(isPaused || isLimitReached) && (
               <div className="agent-active-buttons">
                 <button
                   className="btn btn-primary btn-flex"
                   onClick={onResumeAgent}
-                  title="Resume agent mission"
+                  title={isLimitReached ? 'Resume agent with +50 additional action budget' : 'Resume agent mission'}
                 >
                   <Play size={16} />
-                  <span>Resume Agent</span>
+                  <span>{isLimitReached ? 'Resume (+50 Actions)' : 'Resume Agent'}</span>
                 </button>
                 <button
                   className="btn btn-danger btn-flex"

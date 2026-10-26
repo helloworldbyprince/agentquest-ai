@@ -5,7 +5,11 @@ import { look, move, collect, unlock } from './tools.js';
 export const MISSION_STATUS = {
   READY: 'ready',
   RUNNING: 'running',
+  EXPLORING: 'exploring',
+  REPLANNING: 'replanning',
+  WAITING_AI: 'waiting_ai',
   PAUSED: 'paused',
+  LIMIT_REACHED: 'limit_reached',
   COMPLETED: 'completed',
   FAILED: 'failed'
 };
@@ -27,6 +31,8 @@ export const LOG_TYPES = {
   OBJECT_COLLECTED: 'OBJECT_COLLECTED',
   DOOR_UNLOCKED: 'DOOR_UNLOCKED',
   AGENT_ADAPTED: 'AGENT_ADAPTED',
+  REPEATED_ACTION_WARNED: 'REPEATED_ACTION_WARNED',
+  LIMIT_REACHED: 'LIMIT_REACHED',
   ENVIRONMENT_CHANGED: 'ENVIRONMENT_CHANGED',
   MISSION_COMPLETED: 'MISSION_COMPLETED',
   MISSION_FAILED: 'MISSION_FAILED'
@@ -122,14 +128,16 @@ export function dispatchToolCall(state, toolName, ...args) {
     };
   }
 
-  if (state.status === MISSION_STATUS.PAUSED) {
+  if (state.status === MISSION_STATUS.PAUSED || state.status === MISSION_STATUS.LIMIT_REACHED) {
     return {
       ...state,
       logs: [
         ...state.logs,
         createLogEntry(
           LOG_TYPES.ACTION_FAILED,
-          'Mission is currently paused. Resume before calling tools.',
+          state.status === MISSION_STATUS.LIMIT_REACHED
+            ? 'Action limit reached. Resume with additional budget to continue.'
+            : 'Mission is currently paused. Resume before calling tools.',
           { tool: toolName, status: 'failure', elapsedSeconds: state.stats.elapsedSeconds }
         )
       ]

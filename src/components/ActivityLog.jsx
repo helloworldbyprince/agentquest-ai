@@ -85,6 +85,14 @@ function LogItem({ log }) {
     Icon = Flag;
     badgeClass = 'badge-win';
     badgeText = 'COMPLETED';
+  } else if (log.type === LOG_TYPES.LIMIT_REACHED) {
+    Icon = AlertTriangle;
+    badgeClass = 'badge-rate-limited';
+    badgeText = 'LIMIT REACHED';
+  } else if (log.type === LOG_TYPES.REPEATED_ACTION_WARNED) {
+    Icon = AlertTriangle;
+    badgeClass = 'badge-rate-limited';
+    badgeText = 'LOOP WARNED';
   } else if (log.type === LOG_TYPES.MISSION_FAILED) {
     Icon = AlertCircle;
     badgeClass = 'badge-failure';

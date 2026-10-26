@@ -75,12 +75,13 @@ export async function testAIConnection({ timeoutMs = 12000 } = {}) {
  * Starts a new autonomous AI agent session with Groq primary and Gemini fallback
  */
 export async function startAgentSession({
+  sessionId: customSessionId = null,
   startPos = { row: 7, col: 1 },
   forceProvider = null,
   modelName = null,
   apiKey = null
 } = {}) {
-  const sessionId = `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  const sessionId = customSessionId || `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
   let sessionResult = null;
   let activeProvider = null;
   let fallbackFrom = null;
@@ -140,17 +141,26 @@ export async function startAgentSession({
   }
 
   // 3. Store Authoritative Session State
+  const startCoord = `${startPos.row},${startPos.col}`;
   const sessionData = {
     sessionId,
     startPos,
+    currentPos: { row: startPos.row, col: startPos.col },
     activeProvider,
     activeModel: sessionResult.model,
     actionCount: 1,
+    apiRequestsCount: 1,
+    maxActionBudget: 100,
+    maxApiBudget: 120,
     lastActivity: Date.now(),
     providerRequests: {
       groq: activeProvider === 'groq' ? 1 : 0,
       gemini: activeProvider === 'gemini' ? 1 : 0
     },
+    visitedPositions: new Set([startCoord]),
+    discoveredWalls: new Set(),
+    recentActions: [],
+    repeatedBlockedCount: 0,
     authoritativeHistory: [],
     lastToolCall: sessionResult.toolCall,
     groqSession: activeProvider === 'groq'
@@ -173,8 +183,98 @@ export async function startAgentSession({
       fallbackFrom: fallbackFrom ? 'Groq' : sessionResult.fallbackFrom || undefined,
       toolCall: sessionResult.toolCall,
       thought: sessionResult.thought,
-      actionCount: 1
+      actionCount: 1,
+      maxActionBudget: sessionData.maxActionBudget
     }
+  };
+}
+
+/**
+ * Factual exploration helper: tracks visited positions and discovered walls,
+ * detects repeated unproductive loops, and provides compact factual guidance
+ * without revealing hidden maze tiles.
+ */
+function enrichToolResponse(session, toolResponse) {
+  const rawResp = toolResponse.response || {};
+  const obs = rawResp.observation || {};
+  const toolName = toolResponse.name;
+
+  // Track robot coordinates
+  if (obs.position) {
+    session.currentPos = { row: obs.position.row, col: obs.position.col };
+    session.visitedPositions.add(`${obs.position.row},${obs.position.col}`);
+  }
+
+  // Track discovered walls from blocked moves
+  if (obs.blockedReason === 'wall' && obs.target) {
+    session.discoveredWalls.add(`${obs.target.row},${obs.target.col}`);
+  }
+
+  // Track discovered walls from look() observations
+  if (toolName === 'look' && obs.surroundings) {
+    for (const [, info] of Object.entries(obs.surroundings)) {
+      if (info && info.type === 'wall' && info.row !== undefined && info.col !== undefined) {
+        session.discoveredWalls.add(`${info.row},${info.col}`);
+      }
+    }
+  }
+
+  // Detect repeated unproductive action from the same position
+  let isRepeatedBlocked = false;
+  const lastAction = session.recentActions[session.recentActions.length - 1];
+
+  if (
+    !rawResp.success &&
+    lastAction &&
+    !lastAction.success &&
+    toolName === lastAction.tool &&
+    (
+      (obs.facing && lastAction.facing && obs.facing === lastAction.facing) ||
+      (obs.target && lastAction.target && obs.target.row === lastAction.target.row && obs.target.col === lastAction.target.col) ||
+      toolName === 'look'
+    )
+  ) {
+    isRepeatedBlocked = true;
+    session.repeatedBlockedCount = (session.repeatedBlockedCount || 0) + 1;
+  } else {
+    session.repeatedBlockedCount = 0;
+  }
+
+  session.recentActions.push({
+    tool: toolName,
+    facing: obs.facing || null,
+    target: obs.target || null,
+    args: session.lastToolCall?.args || {},
+    success: Boolean(rawResp.success),
+    blockedReason: obs.blockedReason || null
+  });
+  if (session.recentActions.length > 8) session.recentActions.shift();
+
+  const curr = session.currentPos || session.startPos || { row: 7, col: 1 };
+
+  // Factual exploration summary for session memory
+  const enriched = {
+    ...rawResp,
+    explorationSummary: {
+      currentPosition: curr,
+      totalVisitedTiles: session.visitedPositions.size,
+      discoveredWallsCount: session.discoveredWalls.size
+    }
+  };
+
+  if (rawResp.success === false) {
+    if (isRepeatedBlocked) {
+      enriched.warning = `REPEATED UNPRODUCTIVE ACTION: Attempting "${toolName}" was blocked again. Do NOT repeat this blocked move. You remain safely at (${curr.row}, ${curr.col}). Choose an alternate open direction (north, south, east, west) or call look().`;
+    } else if (obs.blockedReason === 'wall') {
+      enriched.guidance = `Movement blocked by wall at (${obs.target?.row ?? '?'}, ${obs.target?.col ?? '?'}). You remain safely at (${curr.row}, ${curr.col}). Discovered wall recorded. Choose an alternate open direction or call look().`;
+    } else if (obs.blockedReason === 'locked_door') {
+      enriched.guidance = `Door at (${obs.target?.row ?? '?'}, ${obs.target?.col ?? '?'}) is locked. You must find and collect the golden key first, then call unlock() while adjacent.`;
+    }
+  }
+
+  return {
+    ...toolResponse,
+    response: enriched
   };
 }
 
@@ -222,12 +322,16 @@ export async function stepAgentSession({
   }
 
   session.lastActivity = Date.now();
+  session.apiRequestsCount = (session.apiRequestsCount || 0) + 1;
 
-  // 1. Record completed action into authoritative history ledger
+  // 1. Enrich tool response with session exploration memory (without revealing full maze)
+  const enrichedToolResponse = enrichToolResponse(session, toolResponse);
+
+  // 2. Record completed action into authoritative history ledger
   session.authoritativeHistory.push({
     turn: session.actionCount,
     action: session.lastToolCall,
-    result: toolResponse.response,
+    result: enrichedToolResponse.response,
     provider: session.activeProvider,
     model: session.activeModel,
     timestamp: Date.now()
@@ -237,12 +341,12 @@ export async function stepAgentSession({
   let fallbackOccurred = false;
   let previousProvider = null;
 
-  // 2. Execute on Active Provider: GROQ
+  // 3. Execute on Active Provider: GROQ
   if (session.activeProvider === 'groq') {
     try {
       stepResult = await groqProvider.stepSession({
         messages: session.groqSession.messages,
-        toolResponse,
+        toolResponse: enrichedToolResponse,
         lastCallId: session.groqSession.lastCallId
       });
       session.providerRequests.groq += 1;
@@ -264,7 +368,7 @@ export async function stepAgentSession({
           // Step Gemini with the pending tool response
           stepResult = await geminiProvider.stepSession({
             chat,
-            toolResponse,
+            toolResponse: enrichedToolResponse,
             activeModel: model
           });
 
@@ -303,12 +407,12 @@ export async function stepAgentSession({
       }
     }
   }
-  // 3. Execute on Active Provider: GEMINI
+  // 4. Execute on Active Provider: GEMINI
   else if (session.activeProvider === 'gemini') {
     try {
       stepResult = await geminiProvider.stepSession({
         chat: session.geminiSession.chat,
-        toolResponse,
+        toolResponse: enrichedToolResponse,
         activeModel: session.geminiSession.model
       });
       session.providerRequests.gemini += 1;
@@ -325,7 +429,7 @@ export async function stepAgentSession({
 
           stepResult = await geminiProvider.stepSession({
             chat,
-            toolResponse,
+            toolResponse: enrichedToolResponse,
             activeModel: model
           });
 
@@ -360,7 +464,7 @@ export async function stepAgentSession({
     }
   }
 
-  // 4. Update session state
+  // 5. Update session state
   session.actionCount += 1;
   session.lastToolCall = stepResult.toolCall;
 
@@ -376,6 +480,10 @@ export async function stepAgentSession({
       toolCall: stepResult.toolCall,
       thought: stepResult.thought,
       actionCount: session.actionCount,
+      apiRequestsCount: session.apiRequestsCount,
+      discoveredWallsCount: session.discoveredWalls.size,
+      visitedPositionsCount: session.visitedPositions.size,
+      repeatedBlockedCount: session.repeatedBlockedCount,
       providerRequests: session.providerRequests
     }
   };

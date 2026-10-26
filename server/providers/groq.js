@@ -365,6 +365,19 @@ export class GroqProvider {
         messages.push(reminderChoice);
       } else {
         toolCall = { name: 'look', args: {} };
+        const syntheticCallId = `call_${Date.now()}`;
+        nextCallId = syntheticCallId;
+        messages.push({
+          role: 'assistant',
+          content: reminderChoice?.content || null,
+          tool_calls: [
+            {
+              id: syntheticCallId,
+              type: 'function',
+              function: { name: 'look', arguments: '{}' }
+            }
+          ]
+        });
       }
     }
 
