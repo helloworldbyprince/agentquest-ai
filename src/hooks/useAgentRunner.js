@@ -231,106 +231,117 @@ export function useAgentRunner({
       if (controlRef.current.isStopped) break;
 
       // Send actual engine tool result back to active AI Provider
-      try {
-        const stepResponse = await apiFetch('/api/agent/session/step', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sessionId: currentSessionId,
-            toolResponse: {
-              name: toolName,
-              response: currentState.lastToolResult || { success: true }
+      let stepCompleted = false;
+      while (!stepCompleted && !controlRef.current.isStopped) {
+        try {
+          const stepResponse = await apiFetch('/api/agent/session/step', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sessionId: currentSessionId,
+              toolResponse: {
+                name: toolName,
+                response: currentState.lastToolResult || { success: true }
+              }
+            })
+          });
+
+          const stepData = await safeJson(stepResponse);
+
+          if (!stepResponse.ok || !stepData.success) {
+            // Check if all providers are temporarily unavailable
+            if (stepData.allProvidersUnavailable) {
+              currentState = {
+                ...currentState,
+                status: MISSION_STATUS.PAUSED,
+                logs: [
+                  ...currentState.logs,
+                  createLogEntry(
+                    LOG_TYPES.RATE_LIMITED,
+                    'All AI providers are temporarily unavailable. Your mission is safely paused.',
+                    { status: 'warning' }
+                  )
+                ]
+              };
+              setGameState(currentState);
+              controlRef.current.isPaused = true;
+              setIsAgentBusy(false);
+
+              // Wait until user clicks "Resume Agent"
+              await checkPause();
+              if (controlRef.current.isStopped) break;
+              setIsAgentBusy(true);
+              continue;
             }
-          })
-        });
+            throw new Error(stepData.error || 'Agent step returned an error.');
+          }
 
-        const stepData = await safeJson(stepResponse);
+          // Check if mid-session provider fallback occurred
+          if (stepData.fallbackOccurred) {
+            const newProvider = stepData.provider || 'gemini';
+            const newModel = stepData.model || 'gemini-2.5-flash-lite';
+            setActiveProvider(newProvider);
+            setActiveModel(newModel);
 
-        if (!stepResponse.ok || !stepData.success) {
-          // Check if all providers are temporarily unavailable
-          if (stepData.allProvidersUnavailable) {
+            const newLabel = newProvider === 'groq' ? `Groq — ${newModel}` : `Gemini — ${newModel}`;
             currentState = {
               ...currentState,
-              status: MISSION_STATUS.PAUSED,
               logs: [
                 ...currentState.logs,
                 createLogEntry(
                   LOG_TYPES.RATE_LIMITED,
-                  'All AI providers are temporarily unavailable. Your mission is safely paused.',
+                  `${stepData.previousProvider || 'Primary provider'} request quota reached.`,
                   { status: 'warning' }
+                ),
+                createLogEntry(
+                  LOG_TYPES.PROVIDER_SWITCHED,
+                  `${stepData.previousProvider || 'Groq'} → ${newLabel}`,
+                  { status: 'warning' }
+                ),
+                createLogEntry(
+                  LOG_TYPES.MISSION_CONTINUED,
+                  'Previous maze progress preserved.',
+                  { status: 'success' }
                 )
               ]
             };
             setGameState(currentState);
-            break;
           }
-          throw new Error(stepData.error || 'Agent step returned an error.');
-        }
 
-        // Check if mid-session provider fallback occurred
-        if (stepData.fallbackOccurred) {
-          const newProvider = stepData.provider || 'gemini';
-          const newModel = stepData.model || 'gemini-2.5-flash-lite';
-          setActiveProvider(newProvider);
-          setActiveModel(newModel);
+          // Check if agent adapted after a blocked action
+          if (!currentState.lastToolResult?.success && stepData.toolCall) {
+            currentState = {
+              ...currentState,
+              logs: [
+                ...currentState.logs,
+                createLogEntry(
+                  LOG_TYPES.AGENT_ADAPTED,
+                  `Agent adapted after blocked ${toolName}: Choosing ${stepData.toolCall.name} next.`,
+                  { status: 'info' }
+                )
+              ]
+            };
+            setGameState(currentState);
+          }
 
-          const newLabel = newProvider === 'groq' ? `Groq — ${newModel}` : `Gemini — ${newModel}`;
+          nextToolCall = stepData.toolCall;
+          stepCompleted = true;
+        } catch (err) {
+          if (controlRef.current.isStopped) break;
+          const errMsg = err.message || 'Transient error communicating with AI agent.';
           currentState = {
             ...currentState,
+            status: MISSION_STATUS.FAILED,
             logs: [
               ...currentState.logs,
-              createLogEntry(
-                LOG_TYPES.RATE_LIMITED,
-                `${stepData.previousProvider || 'Primary provider'} request quota reached.`,
-                { status: 'warning' }
-              ),
-              createLogEntry(
-                LOG_TYPES.PROVIDER_SWITCHED,
-                `${stepData.previousProvider || 'Groq'} → ${newLabel}`,
-                { status: 'warning' }
-              ),
-              createLogEntry(
-                LOG_TYPES.MISSION_CONTINUED,
-                'Previous maze progress preserved.',
-                { status: 'success' }
-              )
+              createLogEntry(LOG_TYPES.MISSION_FAILED, `Agent Step Error: ${errMsg}`, {
+                status: 'failure'
+              })
             ]
           };
           setGameState(currentState);
+          break;
         }
-
-        // Check if agent adapted after a blocked action
-        if (!currentState.lastToolResult?.success && stepData.toolCall) {
-          currentState = {
-            ...currentState,
-            logs: [
-              ...currentState.logs,
-              createLogEntry(
-                LOG_TYPES.AGENT_ADAPTED,
-                `Agent adapted after blocked ${toolName}: Choosing ${stepData.toolCall.name} next.`,
-                { status: 'info' }
-              )
-            ]
-          };
-          setGameState(currentState);
-        }
-
-        nextToolCall = stepData.toolCall;
-      } catch (err) {
-        if (controlRef.current.isStopped) break;
-        const errMsg = err.message || 'Transient error communicating with AI agent.';
-        currentState = {
-          ...currentState,
-          status: MISSION_STATUS.FAILED,
-          logs: [
-            ...currentState.logs,
-            createLogEntry(LOG_TYPES.MISSION_FAILED, `Agent Step Error: ${errMsg}`, {
-              status: 'failure'
-            })
-          ]
-        };
-        setGameState(currentState);
-        break;
       }
     }
 

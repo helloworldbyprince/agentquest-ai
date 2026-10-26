@@ -119,7 +119,7 @@ export class GroqProvider {
   /**
    * Starts a new session on Groq
    */
-  async startSession({ startPos = { row: 7, col: 1 }, timeoutMs = 15000 } = {}) {
+  async startSession({ startPos = { row: 7, col: 1 }, timeoutMs = 30000 } = {}) {
     if (!this.isConfigured()) {
       throw new Error('GROQ_API_KEY is not configured.');
     }
@@ -133,57 +133,75 @@ export class GroqProvider {
       { role: 'user', content: initialPrompt }
     ];
 
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('REQUEST_TIMEOUT')), timeoutMs)
-    );
+    const executeCall = async () => {
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('REQUEST_TIMEOUT')), timeoutMs)
+      );
 
-    const completionPromise = client.chat.completions.create({
-      model,
-      messages,
-      tools: GROQ_TOOLS,
-      tool_choice: 'auto'
-    });
+      const completionPromise = client.chat.completions.create({
+        model,
+        messages,
+        tools: GROQ_TOOLS,
+        tool_choice: 'auto'
+      });
+
+      return Promise.race([completionPromise, timeoutPromise]);
+    };
 
     let completion = null;
     try {
-      completion = await Promise.race([completionPromise, timeoutPromise]);
-    } catch (apiError) {
-      // Check if error contains failed_generation that we can parse and recover
-      const rawFailedGen = extractFailedGeneration(apiError);
-      if (rawFailedGen) {
+      completion = await executeCall();
+    } catch (firstErr) {
+      // Retry once on transient timeout or 5xx
+      const isRetryable = firstErr.message === 'REQUEST_TIMEOUT' ||
+        (firstErr.status && firstErr.status >= 500) ||
+        firstErr.status === 429;
+      if (isRetryable) {
+        await new Promise((r) => setTimeout(r, 1200));
         try {
-          const parsed = typeof rawFailedGen === 'string' ? JSON.parse(rawFailedGen) : rawFailedGen;
-          const rawName = String(parsed.name || '');
-          const cleanName = rawName.split(/[^a-zA-Z]/)[0].toLowerCase();
-          if (['look', 'move', 'collect', 'unlock'].includes(cleanName)) {
-            const nextCallId = `call_${Date.now()}`;
-            const recoveredToolCall = { name: cleanName, args: parsed.arguments || {} };
-            messages.push({
-              role: 'assistant',
-              content: null,
-              tool_calls: [
-                {
-                  id: nextCallId,
-                  type: 'function',
-                  function: {
-                    name: cleanName,
-                    arguments: JSON.stringify(recoveredToolCall.args)
-                  }
-                }
-              ]
-            });
-            return {
-              provider: this.name,
-              model,
-              toolCall: recoveredToolCall,
-              thought: null,
-              rawCallId: nextCallId,
-              messages
-            };
-          }
-        } catch (_) {}
+          completion = await executeCall();
+        } catch (secondErr) {
+          firstErr = secondErr;
+        }
       }
-      throw apiError;
+
+      if (!completion) {
+        const rawFailedGen = extractFailedGeneration(firstErr);
+        if (rawFailedGen) {
+          try {
+            const parsed = typeof rawFailedGen === 'string' ? JSON.parse(rawFailedGen) : rawFailedGen;
+            const rawName = String(parsed.name || '');
+            const cleanName = rawName.split(/[^a-zA-Z]/)[0].toLowerCase();
+            if (['look', 'move', 'collect', 'unlock'].includes(cleanName)) {
+              const nextCallId = `call_${Date.now()}`;
+              const recoveredToolCall = { name: cleanName, args: parsed.arguments || {} };
+              messages.push({
+                role: 'assistant',
+                content: null,
+                tool_calls: [
+                  {
+                    id: nextCallId,
+                    type: 'function',
+                    function: {
+                      name: cleanName,
+                      arguments: JSON.stringify(recoveredToolCall.args)
+                    }
+                  }
+                ]
+              });
+              return {
+                provider: this.name,
+                model,
+                toolCall: recoveredToolCall,
+                thought: null,
+                rawCallId: nextCallId,
+                messages
+              };
+            }
+          } catch (_) {}
+        }
+        throw firstErr;
+      }
     }
     const choice = completion.choices?.[0]?.message;
 
@@ -224,7 +242,7 @@ export class GroqProvider {
   /**
    * Advances the Groq session with a tool response
    */
-  async stepSession({ messages, toolResponse, lastCallId, timeoutMs = 15000 } = {}) {
+  async stepSession({ messages, toolResponse, lastCallId, timeoutMs = 30000 } = {}) {
     if (!this.isConfigured()) {
       throw new Error('GROQ_API_KEY is not configured.');
     }
@@ -232,63 +250,88 @@ export class GroqProvider {
     const client = this.getClient();
     const model = this.getModelName();
     const callId = lastCallId || `call_${Date.now()}`;
-    messages.push({
+    const toolMsg = {
       role: 'tool',
       tool_call_id: callId,
       content: JSON.stringify(toolResponse.response || { status: 'completed' })
-    });
+    };
+    messages.push(toolMsg);
 
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('REQUEST_TIMEOUT')), timeoutMs)
-    );
+    const executeCall = async () => {
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('REQUEST_TIMEOUT')), timeoutMs)
+      );
 
-    const completionPromise = client.chat.completions.create({
-      model,
-      messages,
-      tools: GROQ_TOOLS,
-      tool_choice: 'auto'
-    });
+      const completionPromise = client.chat.completions.create({
+        model,
+        messages,
+        tools: GROQ_TOOLS,
+        tool_choice: 'auto'
+      });
+
+      return Promise.race([completionPromise, timeoutPromise]);
+    };
 
     let completion = null;
     try {
-      completion = await Promise.race([completionPromise, timeoutPromise]);
+      completion = await executeCall();
     } catch (apiError) {
-      // Check if error contains failed_generation that we can parse and recover
-      const rawFailedGen = extractFailedGeneration(apiError);
-      if (rawFailedGen) {
+      // Check if transient timeout or 5xx: retry once
+      const isRetryable = apiError.message === 'REQUEST_TIMEOUT' ||
+        (apiError.status && apiError.status >= 500) ||
+        apiError.status === 429;
+      if (isRetryable) {
+        await new Promise((r) => setTimeout(r, 1200));
         try {
-          const parsed = typeof rawFailedGen === 'string' ? JSON.parse(rawFailedGen) : rawFailedGen;
-          const rawName = String(parsed.name || '');
-          const cleanName = rawName.split(/[^a-zA-Z]/)[0].toLowerCase();
-          if (['look', 'move', 'collect', 'unlock'].includes(cleanName)) {
-            const nextCallId = `call_${Date.now()}`;
-            const recoveredToolCall = { name: cleanName, args: parsed.arguments || {} };
-            messages.push({
-              role: 'assistant',
-              content: null,
-              tool_calls: [
-                {
-                  id: nextCallId,
-                  type: 'function',
-                  function: {
-                    name: cleanName,
-                    arguments: JSON.stringify(recoveredToolCall.args)
-                  }
-                }
-              ]
-            });
-            return {
-              provider: this.name,
-              model,
-              toolCall: recoveredToolCall,
-              thought: null,
-              rawCallId: nextCallId,
-              messages
-            };
-          }
-        } catch (_) {}
+          completion = await executeCall();
+        } catch (retryErr) {
+          apiError = retryErr;
+        }
       }
-      throw apiError;
+
+      if (!completion) {
+        // Check if error contains failed_generation that we can parse and recover
+        const rawFailedGen = extractFailedGeneration(apiError);
+        if (rawFailedGen) {
+          try {
+            const parsed = typeof rawFailedGen === 'string' ? JSON.parse(rawFailedGen) : rawFailedGen;
+            const rawName = String(parsed.name || '');
+            const cleanName = rawName.split(/[^a-zA-Z]/)[0].toLowerCase();
+            if (['look', 'move', 'collect', 'unlock'].includes(cleanName)) {
+              const nextCallId = `call_${Date.now()}`;
+              const recoveredToolCall = { name: cleanName, args: parsed.arguments || {} };
+              messages.push({
+                role: 'assistant',
+                content: null,
+                tool_calls: [
+                  {
+                    id: nextCallId,
+                    type: 'function',
+                    function: {
+                      name: cleanName,
+                      arguments: JSON.stringify(recoveredToolCall.args)
+                    }
+                  }
+                ]
+              });
+              return {
+                provider: this.name,
+                model,
+                toolCall: recoveredToolCall,
+                thought: null,
+                rawCallId: nextCallId,
+                messages
+              };
+            }
+          } catch (_) {}
+        }
+
+        // Remove the pushed tool message so conversation history is not left in a corrupt state
+        if (messages.length > 0 && messages[messages.length - 1] === toolMsg) {
+          messages.pop();
+        }
+        throw apiError;
+      }
     }
     const choice = completion.choices?.[0]?.message;
 

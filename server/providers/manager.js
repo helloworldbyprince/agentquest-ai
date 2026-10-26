@@ -278,6 +278,9 @@ export async function stepAgentSession({
           console.log(`[AgentQuest Manager] Mission successfully migrated to Gemini (${model})!`);
         } catch (migrationErr) {
           console.error('[AgentQuest Manager] Fallback to Gemini also failed:', migrationErr.message);
+          if (session.authoritativeHistory.length > 0) {
+            session.authoritativeHistory.pop();
+          }
           return {
             status: 503,
             data: {
@@ -331,6 +334,9 @@ export async function stepAgentSession({
           session.providerRequests.gemini += 1;
           fallbackOccurred = true;
         } catch (secondaryErr) {
+          if (session.authoritativeHistory.length > 0) {
+            session.authoritativeHistory.pop();
+          }
           return {
             status: 503,
             data: {
