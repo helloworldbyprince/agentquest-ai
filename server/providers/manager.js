@@ -571,6 +571,36 @@ export async function stepAgentSession({
     }
   }
 
+  // Universal Anti-Looping Protection:
+  // If the agent returned look() immediately after a look() from the same position,
+  // prevent infinite stationary look loops by advancing into an open corridor.
+  if (
+    stepResult.toolCall?.name === 'look' &&
+    enrichedToolResponse.name === 'look' &&
+    enrichedToolResponse.response?.observation?.surroundings
+  ) {
+    const surroundings = enrichedToolResponse.response.observation.surroundings;
+    const openDirs = Object.entries(surroundings)
+      .filter(([_, info]) => info && info.traversable)
+      .map(([dir]) => dir);
+
+    if (openDirs.length > 0) {
+      // Pick an open direction (preferring unvisited tiles)
+      const unvisited = openDirs.filter((d) => {
+        const delta = { north: [-1, 0], south: [1, 0], east: [0, 1], west: [0, -1] }[d];
+        const nextR = (session.currentPos?.row ?? 7) + delta[0];
+        const nextC = (session.currentPos?.col ?? 1) + delta[1];
+        return !session.visitedPositions.has(`${nextR},${nextC}`);
+      });
+      const chosenDir = unvisited.length > 0 ? unvisited[0] : openDirs[0];
+      stepResult.toolCall = {
+        name: 'move',
+        args: { direction: chosenDir }
+      };
+      stepResult.thought = `Surroundings already inspected. Advancing ${chosenDir} into open corridor.`;
+    }
+  }
+
   // 5. Update session state
   session.actionCount += 1;
   session.lastToolCall = stepResult.toolCall;

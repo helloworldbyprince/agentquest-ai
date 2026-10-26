@@ -50,7 +50,7 @@ export const EDITOR_TOOLS = {
 let logCounter = 1;
 
 export function createLogEntry(type, text, details = {}) {
-  const { tool = null, status = 'info', payload = null, elapsedSeconds = 0 } = details;
+  const { tool = null, status = 'info', payload = null, elapsedSeconds = 0, provider = null, ...rest } = details;
   const mins = Math.floor(elapsedSeconds / 60).toString().padStart(2, '0');
   const secs = (elapsedSeconds % 60).toString().padStart(2, '0');
 
@@ -61,7 +61,9 @@ export function createLogEntry(type, text, details = {}) {
     tool,
     text,
     status, // 'success' | 'failure' | 'info'
-    payload
+    payload,
+    provider,
+    ...rest
   };
 }
 

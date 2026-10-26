@@ -10,13 +10,13 @@ Available tools:
 - unlock(): unlock door when adjacent and holding key
 
 Strategy:
-- Do NOT call look() repeatedly. If surroundings are already known, MOVE towards an open direction.
+- If surroundings are known, MOVE towards an open direction. Never call look() twice from the same spot.
+- Move towards open tiles to explore and find the key.
 - Avoid moving into walls.
-- Explore open corridors to locate the key and door.
 
 Reply with valid JSON only. Never output commentary.
 Format:
-{"tool": "move", "arguments": {"direction": "east"}}
+{"tool": "move", "arguments": {"direction": "<direction>"}}
 or
 {"tool": "look", "arguments": {}}
 or
@@ -175,36 +175,73 @@ export class OllamaProvider {
   }
 
   /**
-   * Parses JSON tool call from raw model content
+   * Parses JSON tool call from raw model content with robust fallback and anti-loop detection
    */
-  parseToolCall(content) {
+  parseToolCall(content, lastObs = null) {
     if (!content) return { name: 'look', args: {} };
 
     // Clean markdown code blocks
     let cleaned = content.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
 
+    let toolName = null;
+    let direction = null;
+
     try {
       const parsed = JSON.parse(cleaned);
-      const toolName = (parsed.tool || parsed.name || 'look').toLowerCase().trim();
-      const cleanTool = ['look', 'move', 'collect', 'unlock'].includes(toolName) ? toolName : 'look';
-      
-      let args = {};
-      if (parsed.arguments && typeof parsed.arguments === 'object') {
-        args = parsed.arguments;
-      } else if (parsed.direction) {
-        args = { direction: parsed.direction };
-      }
+      const rawTool = (parsed.tool || parsed.name || parsed.action || parsed.command || '').toLowerCase();
+      if (rawTool.includes('move')) toolName = 'move';
+      else if (rawTool.includes('collect')) toolName = 'collect';
+      else if (rawTool.includes('unlock')) toolName = 'unlock';
+      else if (rawTool.includes('look')) toolName = 'look';
 
-      return normalizeToolCall(cleanTool, args);
-    } catch (_) {
-      // Regex fallback if JSON had minor syntax irregularity
-      const toolMatch = cleaned.match(/"tool":\s*"([a-zA-Z]+)"/);
-      const dirMatch = cleaned.match(/"direction":\s*"([a-zA-Z]+)"/);
-      const toolName = toolMatch ? toolMatch[1].toLowerCase() : 'look';
-      const cleanTool = ['look', 'move', 'collect', 'unlock'].includes(toolName) ? toolName : 'look';
-      const args = dirMatch ? { direction: dirMatch[1].toLowerCase() } : {};
-      return normalizeToolCall(cleanTool, args);
+      if (parsed.direction) direction = parsed.direction;
+      else if (parsed.arguments?.direction) direction = parsed.arguments.direction;
+      else if (parsed.args?.direction) direction = parsed.args.direction;
+    } catch (_) {}
+
+    // Regex fallback
+    if (!toolName) {
+      if (/collect/i.test(cleaned)) toolName = 'collect';
+      else if (/unlock/i.test(cleaned)) toolName = 'unlock';
+      else if (/move/i.test(cleaned)) toolName = 'move';
+      else if (/look/i.test(cleaned)) toolName = 'look';
     }
+
+    if (!direction) {
+      const dirMatch = cleaned.match(/\b(north|south|east|west)\b/i);
+      if (dirMatch) direction = dirMatch[1].toLowerCase();
+    }
+
+    // Anti-loop protection: If tool is look, but last observation already has open surroundings, pick move!
+    if (toolName === 'look' && lastObs?.surroundings) {
+      const openDirs = Object.entries(lastObs.surroundings)
+        .filter(([_, info]) => info && info.traversable)
+        .map(([d]) => d);
+      if (openDirs.length > 0) {
+        toolName = 'move';
+        direction = direction && openDirs.includes(direction.toLowerCase()) ? direction.toLowerCase() : openDirs[0];
+      }
+    }
+
+    // If still no tool resolved, default to move if open directions available, otherwise look
+    if (!toolName) {
+      if (lastObs?.surroundings) {
+        const openDirs = Object.entries(lastObs.surroundings)
+          .filter(([_, info]) => info && info.traversable)
+          .map(([d]) => d);
+        if (openDirs.length > 0) {
+          toolName = 'move';
+          direction = openDirs[0];
+        } else {
+          toolName = 'look';
+        }
+      } else {
+        toolName = 'look';
+      }
+    }
+
+    const args = direction ? { direction: direction.toLowerCase() } : {};
+    return normalizeToolCall(toolName, args);
   }
 
   /**
@@ -266,21 +303,34 @@ export class OllamaProvider {
     const model = this.getModelName();
     const rawResp = toolResponse.response || {};
     const obs = rawResp.observation || {};
+    const currPos = obs.position || { row: 7, col: 1 };
 
-    // Construct ultra-compact factual observation text to save memory & tokens
-    let obsSummary = `Tool "${toolResponse.name}" result: ${rawResp.message || (rawResp.success ? 'Success' : 'Failed')}.`;
-    if (obs.currentTile) obsSummary += ` Current: ${obs.currentTile}.`;
-    if (obs.position) obsSummary += ` At (${obs.position.row}, ${obs.position.col}).`;
-    if (obs.surroundings) {
-      const dirs = Object.entries(obs.surroundings)
-        .map(([d, info]) => `${d}: ${info.traversable ? 'open' : 'blocked'}`)
-        .join(', ');
-      obsSummary += ` Surroundings: ${dirs}.`;
+    // Construct clear, structured guidance for Qwen3 0.6B
+    let obsSummary = '';
+    if (rawResp.message) obsSummary += `${rawResp.message} `;
+    if (obs.currentTile) obsSummary += `Current tile: ${obs.currentTile} at (${currPos.row}, ${currPos.col}). `;
+
+    if (toolResponse.name === 'look' && obs.surroundings) {
+      const openDirs = Object.entries(obs.surroundings)
+        .filter(([_, info]) => info && info.traversable)
+        .map(([d]) => d);
+      const blockedDirs = Object.entries(obs.surroundings)
+        .filter(([_, info]) => info && !info.traversable)
+        .map(([d]) => d);
+
+      obsSummary += `Surroundings: Open: [${openDirs.join(', ')}]. Blocked walls: [${blockedDirs.join(', ')}]. `;
+      if (openDirs.length > 0) {
+        obsSummary += `You MUST MOVE now in an open direction: [${openDirs.join(', ')}]. Do NOT call look. Reply with: {"tool": "move", "arguments": {"direction": "${openDirs[0]}"}}`;
+      } else {
+        obsSummary += `No open path forward. Backtrack or select move direction.`;
+      }
+    } else if (rawResp.success === false && rawResp.warning) {
+      obsSummary += `${rawResp.warning} `;
+    } else if (rawResp.success === false && rawResp.guidance) {
+      obsSummary += `${rawResp.guidance} `;
+    } else {
+      obsSummary += `Select next tool: move, look, collect, unlock. Reply with valid JSON.`;
     }
-    if (rawResp.warning) obsSummary += ` ${rawResp.warning}`;
-    if (rawResp.guidance) obsSummary += ` ${rawResp.guidance}`;
-
-    obsSummary += ` Select your next tool (look, move, collect, unlock) in JSON format.`;
 
     // Keep memory footprint bounded: retain system prompt + last 4 turns
     const history = messages.length > 6
@@ -313,7 +363,7 @@ export class OllamaProvider {
     }
 
     const rawContent = res.data.message?.content || '';
-    const toolCall = this.parseToolCall(rawContent);
+    const toolCall = this.parseToolCall(rawContent, obs);
 
     history.push({
       role: 'assistant',
