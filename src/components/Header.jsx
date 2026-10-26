@@ -62,17 +62,18 @@ export function Header({
 
       if (response.ok && data.success) {
         setAiStatus('connected');
+        const fallbackNote = data.fallbackFrom ? ` (Auto-fallback from ${data.fallbackFrom})` : '';
         setTestResult({
           loading: false,
           success: true,
           model: data.model,
-          message: data.message || 'AgentQuest AI connection successful.'
+          message: (data.message || 'AgentQuest AI connection successful.') + fallbackNote
         });
 
         if (onAddLog) {
           onAddLog(
             'TOOL_RESULT',
-            `Gemini API connected successfully (${data.model}): "${data.message}"`,
+            `Gemini API connected successfully (${data.model}${fallbackNote}): "${data.message}"`,
             { status: 'success', payload: data }
           );
         }

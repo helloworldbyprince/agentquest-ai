@@ -1,4 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
+import { getCandidateModels, isFallbackableError } from './models.js';
 
 export const AGENT_SYSTEM_INSTRUCTION = `You are AgentQuest, a small robot exploring an unknown 9 × 9 maze.
 
@@ -90,11 +91,11 @@ export function getActiveSessionsCount() {
 }
 
 /**
- * Starts a new autonomous Gemini agent session
+ * Starts a new autonomous Gemini agent session with automatic model fallback
  */
 export async function startAgentSession({
   apiKey = process.env.GEMINI_API_KEY,
-  modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite',
+  modelName = process.env.GEMINI_MODEL || 'gemini-flash-lite-latest',
   startPos = { row: 7, col: 1 }
 } = {}) {
   if (!apiKey || apiKey.trim() === '' || apiKey === 'your_gemini_api_key_here') {
@@ -108,70 +109,111 @@ export async function startAgentSession({
   }
 
   const sessionId = `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  const candidateModels = getCandidateModels(modelName);
+  let lastError = null;
+  let lastFailedModel = modelName;
 
-  try {
-    const ai = new GoogleGenAI({ apiKey });
+  for (let i = 0; i < candidateModels.length; i++) {
+    const activeModel = candidateModels[i];
 
-    const chat = ai.chats.create({
-      model: modelName,
-      config: {
-        systemInstruction: AGENT_SYSTEM_INSTRUCTION,
-        tools: AGENT_TOOLS_CONFIG
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+
+      const chat = ai.chats.create({
+        model: activeModel,
+        config: {
+          systemInstruction: AGENT_SYSTEM_INSTRUCTION,
+          tools: AGENT_TOOLS_CONFIG
+        }
+      });
+
+      const initialPrompt = `Mission started. You are positioned at row ${startPos.row}, column ${startPos.col} in an unknown 9×9 maze. Your mission: Find the key, unlock the locked door, and reach the exit. What tool do you want to call first?`;
+
+      const response = await chat.sendMessage({ message: initialPrompt });
+
+      let toolCall = null;
+      if (response.functionCalls && response.functionCalls.length > 0) {
+        const call = response.functionCalls[0];
+        toolCall = {
+          name: call.name,
+          args: call.args || {}
+        };
+      } else {
+        // Fallback: If model replied with text instead of tool call on turn 1, default to look()
+        toolCall = { name: 'look', args: {} };
       }
-    });
 
-    const initialPrompt = `Mission started. You are positioned at row ${startPos.row}, column ${startPos.col} in an unknown 9×9 maze. Your mission: Find the key, unlock the locked door, and reach the exit. What tool do you want to call first?`;
-
-    const response = await chat.sendMessage({ message: initialPrompt });
-
-    let toolCall = null;
-    if (response.functionCalls && response.functionCalls.length > 0) {
-      const call = response.functionCalls[0];
-      toolCall = {
-        name: call.name,
-        args: call.args || {}
-      };
-    } else {
-      // Fallback: If model replied with text instead of tool call on turn 1, default to look()
-      toolCall = { name: 'look', args: {} };
-    }
-
-    const sessionData = {
-      sessionId,
-      chat,
-      modelName,
-      actionCount: 1,
-      lastActivity: Date.now(),
-      history: [{ role: 'agent', toolCall, text: response.text || null }]
-    };
-
-    activeSessions.set(sessionId, sessionData);
-
-    return {
-      status: 200,
-      data: {
-        success: true,
+      const sessionData = {
         sessionId,
-        model: modelName,
-        toolCall,
-        thought: response.text ? response.text.trim() : null,
-        actionCount: 1
+        ai,
+        apiKey,
+        chat,
+        modelName: activeModel,
+        actionCount: 1,
+        lastActivity: Date.now(),
+        history: [{ role: 'agent', toolCall, text: response.text || null }]
+      };
+
+      activeSessions.set(sessionId, sessionData);
+
+      return {
+        status: 200,
+        data: {
+          success: true,
+          sessionId,
+          model: activeModel,
+          fallbackFrom: activeModel !== modelName ? modelName : undefined,
+          toolCall,
+          thought: response.text ? response.text.trim() : null,
+          actionCount: 1
+        }
+      };
+    } catch (error) {
+      lastError = error;
+      lastFailedModel = activeModel;
+      const rawMsg = error?.message || String(error);
+      const status = error?.status || 500;
+
+      // Auth error is fatal — abort immediately without retry
+      if (
+        status === 401 ||
+        status === 403 ||
+        rawMsg.includes('API_KEY_INVALID') ||
+        rawMsg.includes('PERMISSION_DENIED') ||
+        rawMsg.includes('unregistered project') ||
+        rawMsg.includes('API key not valid')
+      ) {
+        return {
+          status: 401,
+          data: {
+            success: false,
+            error: 'Gemini API authentication failed. Please verify that your GEMINI_API_KEY in .env is valid and active in Google AI Studio.'
+          }
+        };
       }
-    };
-  } catch (error) {
-    const rawMsg = error?.message || String(error);
-    return {
-      status: 502,
-      data: {
-        success: false,
-        error: `Failed to initialize Gemini agent session: ${rawMsg.replace(/key=[^&\s]+/gi, 'key=***')}`
+
+      if (isFallbackableError(error) && i < candidateModels.length - 1) {
+        console.warn(`[AgentQuest Backend] startAgentSession failed for "${activeModel}": ${rawMsg.slice(0, 100)}. Falling back to "${candidateModels[i + 1]}"...`);
+        continue;
       }
-    };
+
+      break;
+    }
   }
+
+  const rawMsg = lastError?.message || String(lastError);
+  return {
+    status: 502,
+    data: {
+      success: false,
+      error: `Failed to initialize Gemini agent session across candidate models: ${rawMsg.replace(/key=[^&\s]+/gi, 'key=***')}`
+    }
+  };
 }
 
 /**
- * Executes a step in an ongoing Gemini agent session by returning tool result
+ * Executes a step in an ongoing Gemini agent session by returning tool result,
+ * with mid-session model fallback if the active model encounters quota/rate limits.
  */
 export async function stepAgentSession({
   sessionId,
@@ -214,30 +256,101 @@ export async function stepAgentSession({
 
   session.lastActivity = Date.now();
 
-  try {
-    // Construct valid functionResponse part
-    const responsePart = {
-      functionResponse: {
-        name: toolResponse.name,
-        response: toolResponse.response || { status: 'completed' }
-      }
-    };
+  // Construct valid functionResponse part
+  const responsePart = {
+    functionResponse: {
+      name: toolResponse.name,
+      response: toolResponse.response || { status: 'completed' }
+    }
+  };
 
-    const response = await session.chat.sendMessage({
+  let response = null;
+  let fallbackOccurred = false;
+  const currentModel = session.modelName;
+
+  try {
+    response = await session.chat.sendMessage({
       message: [responsePart]
     });
+  } catch (stepError) {
+    // If the step failed with a quota / rate limit / model issue, attempt mid-session migration
+    if (isFallbackableError(stepError) && session.ai) {
+      console.warn(`[AgentQuest Backend] Mid-session step failed on "${currentModel}": ${stepError.message?.slice(0, 100)}. Attempting automatic model fallback...`);
 
-    session.actionCount += 1;
+      let history = [];
+      try {
+        history = await session.chat.getHistory();
+      } catch (hErr) {
+        console.warn('[AgentQuest Backend] Could not retrieve history:', hErr.message);
+      }
 
-    let toolCall = null;
-    if (response.functionCalls && response.functionCalls.length > 0) {
-      const call = response.functionCalls[0];
-      toolCall = {
-        name: call.name,
-        args: call.args || {}
+      const candidateModels = getCandidateModels(session.modelName).filter((m) => m !== currentModel);
+      let fallbackSuccess = false;
+
+      for (const altModel of candidateModels) {
+        try {
+          console.log(`[AgentQuest Backend] Migrating session to fallback candidate "${altModel}"...`);
+          const fallbackChat = session.ai.chats.create({
+            model: altModel,
+            history: history.length > 0 ? history : undefined,
+            config: {
+              systemInstruction: AGENT_SYSTEM_INSTRUCTION,
+              tools: AGENT_TOOLS_CONFIG
+            }
+          });
+
+          response = await fallbackChat.sendMessage({
+            message: [responsePart]
+          });
+
+          session.chat = fallbackChat;
+          session.modelName = altModel;
+          fallbackOccurred = true;
+          fallbackSuccess = true;
+          console.log(`[AgentQuest Backend] Session successfully migrated to "${altModel}".`);
+          break;
+        } catch (altErr) {
+          if (!isFallbackableError(altErr)) break;
+          console.warn(`[AgentQuest Backend] Candidate "${altModel}" failed: ${altErr.message?.slice(0, 80)}`);
+        }
+      }
+
+      if (!fallbackSuccess) {
+        const rawMsg = stepError?.message || String(stepError);
+        return {
+          status: 502,
+          data: {
+            success: false,
+            error: `Agent step failed: ${rawMsg.replace(/key=[^&\s]+/gi, 'key=***')}`,
+            actionCount: session.actionCount
+          }
+        };
+      }
+    } else {
+      const rawMsg = stepError?.message || String(stepError);
+      return {
+        status: 502,
+        data: {
+          success: false,
+          error: `Agent step failed: ${rawMsg.replace(/key=[^&\s]+/gi, 'key=***')}`,
+          actionCount: session.actionCount
+        }
       };
-    } else if (response.text) {
-      // If model returned text without a tool call, send a quick reminder
+    }
+  }
+
+  session.actionCount += 1;
+
+  let toolCall = null;
+  if (response.functionCalls && response.functionCalls.length > 0) {
+    const call = response.functionCalls[0];
+    toolCall = {
+      name: call.name,
+      args: call.args || {}
+    };
+  } else if (response.text) {
+    // If model returned text without a tool call, send a quick reminder
+    try {
       const reminderResponse = await session.chat.sendMessage({
         message: 'Observation received. Please select your next tool call (look, move, collect, or unlock).'
       });
@@ -248,35 +361,27 @@ export async function stepAgentSession({
           args: call.args || {}
         };
       }
-    }
-
-    session.history.push({
-      role: 'agent',
-      toolCall,
-      text: response.text || null
-    });
-
-    return {
-      status: 200,
-      data: {
-        success: true,
-        sessionId,
-        toolCall,
-        thought: response.text ? response.text.trim() : null,
-        actionCount: session.actionCount
-      }
-    };
-  } catch (error) {
-    const rawMsg = error?.message || String(error);
-    return {
-      status: 502,
-      data: {
-        success: false,
-        error: `Agent step failed: ${rawMsg.replace(/key=[^&\s]+/gi, 'key=***')}`,
-        actionCount: session.actionCount
-      }
-    };
+    } catch (_) {}
   }
+
+  session.history.push({
+    role: 'agent',
+    toolCall,
+    text: response.text || null
+  });
+
+  return {
+    status: 200,
+    data: {
+      success: true,
+      sessionId,
+      model: session.modelName,
+      fallbackOccurred,
+      toolCall,
+      thought: response.text ? response.text.trim() : null,
+      actionCount: session.actionCount
+    }
+  };
 }
 
 /**
@@ -289,4 +394,3 @@ export function stopAgentSession(sessionId) {
   }
   return { status: 200, data: { success: true, message: 'Session not active.' } };
 }
-

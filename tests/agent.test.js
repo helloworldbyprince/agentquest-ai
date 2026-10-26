@@ -182,7 +182,7 @@ describe('Live Gemini API Function Calling Integration (Real API Call)', () => {
       // 4. Clean up session
       stopAgentSession(startResult.data.sessionId);
     },
-    20000 // 20s timeout for live API network call
+    35000 // 35s timeout for live API network call
   );
 });
 

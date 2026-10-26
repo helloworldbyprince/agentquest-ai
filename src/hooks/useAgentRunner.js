@@ -114,6 +114,22 @@ export function useAgentRunner({
     controlRef.current.sessionId = currentSessionId;
     setSessionId(currentSessionId);
 
+    // If backend automatically fell back to another model due to quota limits
+    if (sessionData.fallbackFrom) {
+      currentState = {
+        ...currentState,
+        logs: [
+          ...currentState.logs,
+          createLogEntry(
+            LOG_TYPES.AGENT_ADAPTED,
+            `Quota reached on ${sessionData.fallbackFrom}. Auto-switched to ${sessionData.model}.`,
+            { status: 'info' }
+          )
+        ]
+      };
+      setGameState(currentState);
+    }
+
     let nextToolCall = sessionData.toolCall;
 
     // 3. Autonomous Execution Loop
@@ -204,6 +220,22 @@ export function useAgentRunner({
 
         if (!stepResponse.ok || !stepData.success) {
           throw new Error(stepData.error || 'Agent step returned an error.');
+        }
+
+        // Check if mid-session model fallback occurred due to rate limits
+        if (stepData.fallbackOccurred) {
+          currentState = {
+            ...currentState,
+            logs: [
+              ...currentState.logs,
+              createLogEntry(
+                LOG_TYPES.AGENT_ADAPTED,
+                `Model limit reached. Session seamlessly migrated to ${stepData.model}.`,
+                { status: 'info' }
+              )
+            ]
+          };
+          setGameState(currentState);
         }
 
         // Check if agent adapted after a blocked action
