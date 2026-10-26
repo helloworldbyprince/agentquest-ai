@@ -12,6 +12,8 @@ export const MISSION_STATUS = {
 
 export const LOG_TYPES = {
   MISSION_START: 'MISSION_START',
+  AGENT_STARTED: 'AGENT_STARTED',
+  GEMINI_RESPONSE: 'GEMINI_RESPONSE',
   TOOL_CALL: 'TOOL_CALL',
   TOOL_RESULT: 'TOOL_RESULT',
   OBSERVATION: 'OBSERVATION',
@@ -19,6 +21,7 @@ export const LOG_TYPES = {
   ACTION_FAILED: 'ACTION_FAILED',
   OBJECT_COLLECTED: 'OBJECT_COLLECTED',
   DOOR_UNLOCKED: 'DOOR_UNLOCKED',
+  AGENT_ADAPTED: 'AGENT_ADAPTED',
   ENVIRONMENT_CHANGED: 'ENVIRONMENT_CHANGED',
   MISSION_COMPLETED: 'MISSION_COMPLETED',
   MISSION_FAILED: 'MISSION_FAILED'
@@ -143,8 +146,14 @@ export function dispatchToolCall(state, toolName, ...args) {
   }
 
   // 1. Log the tool invocation
-  const argStr = args.length > 0 ? JSON.stringify(args[0]) : '';
-  const callText = `${toolName}(${argStr})`;
+  let callText = `${toolName}()`;
+  if (toolName === 'move') {
+    const dir = typeof args[0] === 'object' && args[0]?.direction ? args[0].direction : args[0];
+    callText = `move("${dir || ''}")`;
+  } else if (args.length > 0) {
+    callText = `${toolName}(${JSON.stringify(args[0])})`;
+  }
+
   const callLog = createLogEntry(LOG_TYPES.TOOL_CALL, callText, {
     tool: toolName,
     status: 'info',
@@ -157,9 +166,11 @@ export function dispatchToolCall(state, toolName, ...args) {
     case 'look':
       result = look(state);
       break;
-    case 'move':
-      result = move(state, args[0]);
+    case 'move': {
+      const dir = typeof args[0] === 'object' && args[0]?.direction ? args[0].direction : args[0];
+      result = move(state, dir);
       break;
+    }
     case 'collect':
       result = collect(state);
       break;
@@ -259,6 +270,7 @@ export function dispatchToolCall(state, toolName, ...args) {
     robot: updatedRobot,
     hasKey: updatedHasKey,
     doorUnlocked: updatedDoorUnlocked,
+    lastToolResult: result,
     stats: {
       ...state.stats,
       toolCalls: state.stats.toolCalls + 1,

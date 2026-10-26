@@ -15,11 +15,13 @@ export function ManualControls({
   missionStatus,
   hasKey,
   doorUnlocked,
+  gameMode = 'manual',
   disabled = false
 }) {
   const isCompleted = missionStatus === MISSION_STATUS.COMPLETED;
   const isPaused = missionStatus === MISSION_STATUS.PAUSED;
-  const isControlsDisabled = disabled || isCompleted || isPaused;
+  const isAgentMode = gameMode === 'agent';
+  const isControlsDisabled = disabled || isCompleted || isPaused || isAgentMode;
 
   // Keyboard shortcut handler
   useEffect(() => {
@@ -82,7 +84,9 @@ export function ManualControls({
     <div className="manual-controls-card">
       <div className="controls-card-header">
         <h3 className="controls-title">Manual Tool Controls</h3>
-        <span className="controls-keyboard-hint">Arrow Keys or WASD supported</span>
+        <span className="controls-keyboard-hint">
+          {isAgentMode ? '🔒 Disabled in AI Agent Mode' : 'Arrow Keys or WASD supported'}
+        </span>
       </div>
 
       <div className="controls-layout">

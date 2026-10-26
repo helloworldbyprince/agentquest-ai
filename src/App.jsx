@@ -7,6 +7,7 @@ import {
   MISSION_STATUS
 } from './game/engine.js';
 import { DEFAULT_PRESET_ID, MAZE_PRESETS } from './game/mazes.js';
+import { useAgentRunner } from './hooks/useAgentRunner.js';
 import { Header } from './components/Header.jsx';
 import { MazeGrid } from './components/MazeGrid.jsx';
 import { EditToolbar } from './components/EditToolbar.jsx';
@@ -22,6 +23,22 @@ export function App() {
   const [selectedPresetId, setSelectedPresetId] = useState(DEFAULT_PRESET_ID);
   const [isEditMode, setIsEditMode] = useState(false);
   const [selectedEditorTool, setSelectedEditorTool] = useState('wall');
+  const [gameMode, setGameMode] = useState('agent'); // 'manual' | 'agent'
+
+  // Autonomous Agent Runner Hook
+  const {
+    speed,
+    setSpeed,
+    isAgentBusy,
+    startAgent,
+    pauseAgent,
+    resumeAgent,
+    stopAgent
+  } = useAgentRunner({
+    gameState,
+    setGameState,
+    selectedPresetId
+  });
 
   // Timer interval for elapsed time when running
   useEffect(() => {
@@ -97,8 +114,9 @@ export function App() {
 
   // Reset Mission
   const handleResetMission = useCallback(() => {
+    stopAgent();
     setGameState((prev) => createInitialState(prev.presetId, prev.grid));
-  }, []);
+  }, [stopAgent]);
 
   // Add system / API log entry
   const handleAddLog = useCallback((type, text, details = {}) => {
@@ -120,7 +138,13 @@ export function App() {
   return (
     <div className="app-container">
       {/* Top Header */}
-      <Header onReset={handleResetMission} isRunning={isRunning} onAddLog={handleAddLog} />
+      <Header
+        gameMode={gameMode}
+        onModeChange={setGameMode}
+        onReset={handleResetMission}
+        isRunning={isRunning}
+        onAddLog={handleAddLog}
+      />
 
       {/* Main Game Dashboard */}
       <main className="dashboard-layout">
@@ -199,6 +223,7 @@ export function App() {
             missionStatus={gameState.status}
             hasKey={gameState.hasKey}
             doorUnlocked={gameState.doorUnlocked}
+            gameMode={gameMode}
             disabled={isEditMode}
           />
         </section>
@@ -213,10 +238,18 @@ export function App() {
             doorUnlocked={gameState.doorUnlocked}
             stats={gameState.stats}
             validation={gameState.validation}
+            gameMode={gameMode}
+            agentSpeed={speed}
+            onSpeedChange={setSpeed}
+            isAgentBusy={isAgentBusy}
             onStart={handleStartMission}
             onPause={handlePauseMission}
             onResume={handleResumeMission}
             onReset={handleResetMission}
+            onStartAgent={startAgent}
+            onPauseAgent={pauseAgent}
+            onResumeAgent={resumeAgent}
+            onStopAgent={stopAgent}
           />
 
           {/* Live Activity Feed */}

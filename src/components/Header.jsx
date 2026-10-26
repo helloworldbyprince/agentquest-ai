@@ -1,7 +1,13 @@
 import React, { useState } from 'react';
 import { Bot, RotateCcw, Sparkles, Loader2, CheckCircle2, AlertCircle, X } from 'lucide-react';
 
-export function Header({ onReset, isRunning, onAddLog }) {
+export function Header({
+  gameMode = 'manual',
+  onModeChange,
+  onReset,
+  isRunning,
+  onAddLog
+}) {
   const [aiStatus, setAiStatus] = useState('not_connected'); // 'not_connected' | 'connecting' | 'connected' | 'failed'
   const [testResult, setTestResult] = useState(null);
 
@@ -112,10 +118,26 @@ export function Header({ onReset, isRunning, onAddLog }) {
         </div>
 
         <div className="header-right">
-          {/* Manual Mode Badge */}
-          <div className="mode-pill" title="Manual Exploration & Tool Verification">
-            <span className="mode-indicator-dot"></span>
-            <span className="mode-pill-text">Manual Mode</span>
+          {/* Mode Selector */}
+          <div className="mode-selector-pill" role="radiogroup" aria-label="Game Mode">
+            <button
+              className={`mode-btn ${gameMode === 'manual' ? 'active' : ''}`}
+              onClick={() => onModeChange && onModeChange('manual')}
+              disabled={isRunning}
+              type="button"
+              title="Manual Mode: Human player drives tool calls"
+            >
+              <span>🎮 Manual</span>
+            </button>
+            <button
+              className={`mode-btn ${gameMode === 'agent' ? 'active' : ''}`}
+              onClick={() => onModeChange && onModeChange('agent')}
+              disabled={isRunning}
+              type="button"
+              title="AI Agent Mode: Gemini autonomously drives tool calls"
+            >
+              <span>🤖 AI Agent</span>
+            </button>
           </div>
 
           {/* AI Connection Status Badge */}

@@ -4,14 +4,16 @@ import {
   Pause,
   RotateCcw,
   Key,
-  Shield,
   Clock,
   Compass,
   Activity,
-  CheckCircle2,
-  AlertCircle
+  Bot,
+  Square,
+  Sparkles,
+  Sliders
 } from 'lucide-react';
 import { MISSION_STATUS } from '../game/engine.js';
+import { AGENT_SPEEDS } from '../hooks/useAgentRunner.js';
 
 export function StatusPanel({
   status,
@@ -20,15 +22,24 @@ export function StatusPanel({
   doorUnlocked,
   stats,
   validation,
+  gameMode = 'manual',
+  agentSpeed = AGENT_SPEEDS.normal.ms,
+  onSpeedChange,
+  isAgentBusy = false,
   onStart,
   onPause,
   onResume,
-  onReset
+  onReset,
+  onStartAgent,
+  onPauseAgent,
+  onResumeAgent,
+  onStopAgent
 }) {
   const isReady = status === MISSION_STATUS.READY;
   const isRunning = status === MISSION_STATUS.RUNNING;
   const isPaused = status === MISSION_STATUS.PAUSED;
   const isCompleted = status === MISSION_STATUS.COMPLETED;
+  const isFailed = status === MISSION_STATUS.FAILED;
 
   const mins = Math.floor(stats.elapsedSeconds / 60)
     .toString()
@@ -40,7 +51,12 @@ export function StatusPanel({
     <div className="status-card">
       <div className="status-header">
         <div>
-          <span className="status-label-sub">Agent State</span>
+          <div className="status-mode-indicator">
+            <span className="status-label-sub">Mode: </span>
+            <span className="status-mode-tag">
+              {gameMode === 'agent' ? '🤖 Autonomous AI Agent' : '🎮 Manual Player'}
+            </span>
+          </div>
           <h2 className="status-title">Mission Overview</h2>
         </div>
         <div className={`status-pill status-${status}`}>
@@ -65,7 +81,11 @@ export function StatusPanel({
             {doorUnlocked ? '✓ Door' : '2. Unlock Door'}
           </span>
           <span className="goal-arrow">→</span>
-          <span className={`goal-step ${isCompleted ? 'completed' : doorUnlocked ? 'active' : 'pending'}`}>
+          <span
+            className={`goal-step ${
+              isCompleted ? 'completed' : doorUnlocked ? 'active' : 'pending'
+            }`}
+          >
             {isCompleted ? '✓ Escaped' : '3. Reach Exit'}
           </span>
         </div>
@@ -120,48 +140,139 @@ export function StatusPanel({
         </div>
       </div>
 
+      {/* Speed Selector (AI Agent Mode Only) */}
+      {gameMode === 'agent' && (
+        <div className="agent-speed-bar">
+          <div className="speed-title-wrap">
+            <Sliders size={13} className="text-indigo-500" />
+            <span className="speed-label">Playback Delay:</span>
+          </div>
+          <div className="speed-btn-group" role="group" aria-label="Playback Speed">
+            {Object.values(AGENT_SPEEDS).map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                className={`speed-btn ${agentSpeed === s.ms ? 'active' : ''}`}
+                onClick={() => onSpeedChange && onSpeedChange(s.ms)}
+                title={`${s.label} between robot tool steps`}
+              >
+                {s.label.split(' ')[0]}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Mission Controls Bar */}
       <div className="mission-actions-bar">
-        {isReady && (
-          <button
-            className="btn btn-primary btn-full-width"
-            onClick={onStart}
-            disabled={!validation.isValid}
-            title={validation.isValid ? 'Begin mission' : 'Solve maze errors before starting'}
-          >
-            <Play size={16} />
-            <span>Start Mission</span>
-          </button>
-        )}
+        {gameMode === 'agent' ? (
+          /* AI AGENT CONTROLS */
+          <>
+            {isReady && (
+              <button
+                className="btn btn-primary btn-full-width"
+                onClick={onStartAgent}
+                disabled={!validation.isValid || isAgentBusy}
+                title={validation.isValid ? 'Launch Gemini autonomous agent loop' : 'Fix maze errors first'}
+              >
+                <Bot size={16} />
+                <span>Start AI Agent</span>
+              </button>
+            )}
 
-        {isRunning && (
-          <button className="btn btn-warning btn-full-width" onClick={onPause}>
-            <Pause size={16} />
-            <span>Pause Mission</span>
-          </button>
-        )}
+            {isRunning && (
+              <div className="agent-active-buttons">
+                <button
+                  className="btn btn-warning btn-flex"
+                  onClick={onPauseAgent}
+                  title="Pause agent after current action"
+                >
+                  <Pause size={16} />
+                  <span>Pause Agent</span>
+                </button>
+                <button
+                  className="btn btn-danger btn-flex"
+                  onClick={onStopAgent}
+                  title="Stop agent mission"
+                >
+                  <Square size={14} />
+                  <span>Stop Agent</span>
+                </button>
+              </div>
+            )}
 
-        {isPaused && (
-          <button className="btn btn-primary btn-full-width" onClick={onResume}>
-            <Play size={16} />
-            <span>Resume Mission</span>
-          </button>
-        )}
+            {isPaused && (
+              <div className="agent-active-buttons">
+                <button
+                  className="btn btn-primary btn-flex"
+                  onClick={onResumeAgent}
+                  title="Resume agent mission"
+                >
+                  <Play size={16} />
+                  <span>Resume Agent</span>
+                </button>
+                <button
+                  className="btn btn-danger btn-flex"
+                  onClick={onStopAgent}
+                  title="Stop agent mission"
+                >
+                  <Square size={14} />
+                  <span>Stop Agent</span>
+                </button>
+              </div>
+            )}
 
-        {isCompleted && (
-          <button className="btn btn-primary btn-full-width" onClick={onReset}>
-            <RotateCcw size={16} />
-            <span>Play Again</span>
-          </button>
-        )}
+            {(isCompleted || isFailed) && (
+              <button className="btn btn-primary btn-full-width" onClick={onReset}>
+                <RotateCcw size={16} />
+                <span>{isCompleted ? 'Mission Complete! Reset' : 'Mission Failed. Reset'}</span>
+              </button>
+            )}
+          </>
+        ) : (
+          /* MANUAL MODE CONTROLS */
+          <>
+            {isReady && (
+              <button
+                className="btn btn-primary btn-full-width"
+                onClick={onStart}
+                disabled={!validation.isValid}
+                title={validation.isValid ? 'Begin manual mission' : 'Solve maze errors before starting'}
+              >
+                <Play size={16} />
+                <span>Start Mission</span>
+              </button>
+            )}
 
-        {(isRunning || isPaused) && (
-          <button className="btn btn-outline" onClick={onReset} title="Reset to start">
-            <RotateCcw size={16} />
-          </button>
+            {isRunning && (
+              <button className="btn btn-warning btn-full-width" onClick={onPause}>
+                <Pause size={16} />
+                <span>Pause Mission</span>
+              </button>
+            )}
+
+            {isPaused && (
+              <button className="btn btn-primary btn-full-width" onClick={onResume}>
+                <Play size={16} />
+                <span>Resume Mission</span>
+              </button>
+            )}
+
+            {(isCompleted || isFailed) && (
+              <button className="btn btn-primary btn-full-width" onClick={onReset}>
+                <RotateCcw size={16} />
+                <span>Play Again</span>
+              </button>
+            )}
+
+            {(isRunning || isPaused) && (
+              <button className="btn btn-outline" onClick={onReset} title="Reset to start">
+                <RotateCcw size={16} />
+              </button>
+            )}
+          </>
         )}
       </div>
     </div>
   );
 }
-

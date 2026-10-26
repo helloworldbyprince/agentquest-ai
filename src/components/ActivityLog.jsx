@@ -10,7 +10,10 @@ import {
   Flag,
   ChevronDown,
   ChevronRight,
-  Code
+  Code,
+  Bot,
+  Sparkles,
+  Cpu
 } from 'lucide-react';
 import { LOG_TYPES } from '../game/engine.js';
 
@@ -22,10 +25,26 @@ function LogItem({ log }) {
   let badgeClass = 'badge-info';
   let badgeText = log.type.replace('_', ' ');
 
-  if (log.type === LOG_TYPES.TOOL_CALL) {
+  if (log.type === LOG_TYPES.AGENT_STARTED) {
+    Icon = Bot;
+    badgeClass = 'badge-start';
+    badgeText = 'AGENT STARTED';
+  } else if (log.type === LOG_TYPES.GEMINI_RESPONSE) {
+    Icon = Sparkles;
+    badgeClass = 'badge-gemini';
+    badgeText = 'GEMINI RESPONSE';
+  } else if (log.type === LOG_TYPES.AGENT_ADAPTED) {
+    Icon = Cpu;
+    badgeClass = 'badge-adapted';
+    badgeText = 'AGENT ADAPTED';
+  } else if (log.type === LOG_TYPES.TOOL_CALL) {
     Icon = Code;
     badgeClass = 'badge-tool-call';
     badgeText = log.tool ? `${log.tool}()` : 'TOOL CALL';
+  } else if (log.type === LOG_TYPES.TOOL_RESULT) {
+    Icon = Terminal;
+    badgeClass = 'badge-info';
+    badgeText = 'TOOL RESULT';
   } else if (log.type === LOG_TYPES.ACTION_SUCCESS) {
     Icon = CheckCircle2;
     badgeClass = 'badge-success';
@@ -47,6 +66,10 @@ function LogItem({ log }) {
     Icon = Flag;
     badgeClass = 'badge-win';
     badgeText = 'COMPLETED';
+  } else if (log.type === LOG_TYPES.MISSION_FAILED) {
+    Icon = AlertCircle;
+    badgeClass = 'badge-failure';
+    badgeText = 'FAILED';
   } else if (log.type === LOG_TYPES.MISSION_START) {
     Icon = Play;
     badgeClass = 'badge-start';
