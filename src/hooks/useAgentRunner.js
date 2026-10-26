@@ -22,6 +22,8 @@ export function useAgentRunner({
   const [speed, setSpeed] = useState(AGENT_SPEEDS.normal.ms);
   const [isAgentBusy, setIsAgentBusy] = useState(false);
   const [sessionId, setSessionId] = useState(null);
+  const [activeProvider, setActiveProvider] = useState('groq');
+  const [activeModel, setActiveModel] = useState('openai/gpt-oss-20b');
 
   // Control refs for non-stale access inside async loop
   const controlRef = useRef({
@@ -114,21 +116,47 @@ export function useAgentRunner({
     controlRef.current.sessionId = currentSessionId;
     setSessionId(currentSessionId);
 
-    // If backend automatically fell back to another model due to quota limits
+    const providerName = sessionData.provider || 'groq';
+    const modelName = sessionData.model || 'openai/gpt-oss-20b';
+    setActiveProvider(providerName);
+    setActiveModel(modelName);
+
+    // Friendly Activity Log: PROVIDER SELECTED
+    const providerLabel = providerName === 'groq'
+      ? `Groq — ${modelName.includes('/') ? modelName.split('/')[1].toUpperCase() : modelName}`
+      : `Gemini — ${modelName}`;
+
+    currentState = {
+      ...currentState,
+      logs: [
+        ...currentState.logs,
+        createLogEntry(LOG_TYPES.PROVIDER_SELECTED, providerLabel, {
+          status: 'info',
+          provider: providerName
+        })
+      ]
+    };
+
+    // If initial fallback occurred from Groq to Gemini
     if (sessionData.fallbackFrom) {
       currentState = {
         ...currentState,
         logs: [
           ...currentState.logs,
           createLogEntry(
-            LOG_TYPES.AGENT_ADAPTED,
-            `Quota reached on ${sessionData.fallbackFrom}. Auto-switched to ${sessionData.model}.`,
-            { status: 'info' }
+            LOG_TYPES.PROVIDER_SWITCHED,
+            `${sessionData.fallbackFrom} → ${providerLabel}`,
+            { status: 'warning', provider: providerName }
+          ),
+          createLogEntry(
+            LOG_TYPES.MISSION_CONTINUED,
+            'Previous maze progress preserved.',
+            { status: 'success' }
           )
         ]
       };
-      setGameState(currentState);
     }
+    setGameState(currentState);
 
     let nextToolCall = sessionData.toolCall;
 
@@ -144,7 +172,7 @@ export function useAgentRunner({
           status: MISSION_STATUS.FAILED,
           logs: [
             ...prev.logs,
-            createLogEntry(LOG_TYPES.MISSION_FAILED, 'Gemini did not return an actionable tool call.', {
+            createLogEntry(LOG_TYPES.MISSION_FAILED, 'AI model did not return an actionable tool call.', {
               status: 'failure'
             })
           ]
@@ -152,12 +180,12 @@ export function useAgentRunner({
         break;
       }
 
-      // Log GEMINI_RESPONSE
+      // Log AI DECISION
       const argSummary = nextToolCall.args ? JSON.stringify(nextToolCall.args) : '';
-      const geminiLog = createLogEntry(
-        LOG_TYPES.GEMINI_RESPONSE,
-        `Gemini decided: ${nextToolCall.name}(${argSummary})`,
-        { tool: nextToolCall.name, status: 'info', payload: nextToolCall }
+      const decisionLog = createLogEntry(
+        LOG_TYPES.AI_RESPONSE,
+        `${providerName === 'groq' ? 'Groq' : 'Gemini'} decided: ${nextToolCall.name}(${argSummary})`,
+        { tool: nextToolCall.name, status: 'info', payload: nextToolCall, provider: providerName }
       );
 
       // Execute tool call on authoritative game engine
@@ -170,7 +198,7 @@ export function useAgentRunner({
 
       currentState = {
         ...currentState,
-        logs: [...currentState.logs, geminiLog]
+        logs: [...currentState.logs, decisionLog]
       };
 
       currentState = dispatchToolCall(currentState, toolName, ...toolArgs);
@@ -202,7 +230,7 @@ export function useAgentRunner({
       await checkPause();
       if (controlRef.current.isStopped) break;
 
-      // Send actual engine tool result back to Gemini
+      // Send actual engine tool result back to active AI Provider
       try {
         const stepResponse = await apiFetch('/api/agent/session/step', {
           method: 'POST',
@@ -219,19 +247,52 @@ export function useAgentRunner({
         const stepData = await safeJson(stepResponse);
 
         if (!stepResponse.ok || !stepData.success) {
+          // Check if all providers are temporarily unavailable
+          if (stepData.allProvidersUnavailable) {
+            currentState = {
+              ...currentState,
+              status: MISSION_STATUS.PAUSED,
+              logs: [
+                ...currentState.logs,
+                createLogEntry(
+                  LOG_TYPES.RATE_LIMITED,
+                  'All AI providers are temporarily unavailable. Your mission is safely paused.',
+                  { status: 'warning' }
+                )
+              ]
+            };
+            setGameState(currentState);
+            break;
+          }
           throw new Error(stepData.error || 'Agent step returned an error.');
         }
 
-        // Check if mid-session model fallback occurred due to rate limits
+        // Check if mid-session provider fallback occurred
         if (stepData.fallbackOccurred) {
+          const newProvider = stepData.provider || 'gemini';
+          const newModel = stepData.model || 'gemini-2.5-flash-lite';
+          setActiveProvider(newProvider);
+          setActiveModel(newModel);
+
+          const newLabel = newProvider === 'groq' ? `Groq — ${newModel}` : `Gemini — ${newModel}`;
           currentState = {
             ...currentState,
             logs: [
               ...currentState.logs,
               createLogEntry(
-                LOG_TYPES.AGENT_ADAPTED,
-                `Model limit reached. Session seamlessly migrated to ${stepData.model}.`,
-                { status: 'info' }
+                LOG_TYPES.RATE_LIMITED,
+                `${stepData.previousProvider || 'Primary provider'} request quota reached.`,
+                { status: 'warning' }
+              ),
+              createLogEntry(
+                LOG_TYPES.PROVIDER_SWITCHED,
+                `${stepData.previousProvider || 'Groq'} → ${newLabel}`,
+                { status: 'warning' }
+              ),
+              createLogEntry(
+                LOG_TYPES.MISSION_CONTINUED,
+                'Previous maze progress preserved.',
+                { status: 'success' }
               )
             ]
           };
@@ -257,7 +318,7 @@ export function useAgentRunner({
         nextToolCall = stepData.toolCall;
       } catch (err) {
         if (controlRef.current.isStopped) break;
-        const errMsg = err.message || 'Transient error contacting Gemini.';
+        const errMsg = err.message || 'Transient error communicating with AI agent.';
         currentState = {
           ...currentState,
           status: MISSION_STATUS.FAILED,
@@ -332,6 +393,8 @@ export function useAgentRunner({
     setSpeed,
     isAgentBusy,
     sessionId,
+    activeProvider,
+    activeModel,
     startAgent,
     pauseAgent,
     resumeAgent,

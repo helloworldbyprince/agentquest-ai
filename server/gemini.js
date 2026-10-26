@@ -25,8 +25,9 @@ export async function testGeminiConnection({
 
   for (let i = 0; i < candidateModels.length; i++) {
     const activeModel = candidateModels[i];
+    const activeTimeout = Math.min(timeoutMs, 4500);
     const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('REQUEST_TIMEOUT')), timeoutMs);
+      setTimeout(() => reject(new Error('REQUEST_TIMEOUT')), activeTimeout);
     });
 
     try {

@@ -1,12 +1,12 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { testGeminiConnection } from './gemini.js';
 import {
+  testAIConnection,
   startAgentSession,
   stepAgentSession,
   stopAgentSession
-} from './agent.js';
+} from './providers/manager.js';
 
 // Load environment variables from .env
 dotenv.config();
@@ -22,16 +22,21 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-// Gemini Connection Test Endpoint
+// AI Connection Test Endpoint (Tests Groq primary, Gemini fallback)
 app.post('/api/gemini/test', async (req, res) => {
-  const result = await testGeminiConnection();
+  const result = await testAIConnection();
+  return res.status(result.status).json(result.data);
+});
+
+app.post('/api/ai/test', async (req, res) => {
+  const result = await testAIConnection();
   return res.status(result.status).json(result.data);
 });
 
 // Autonomous Agent Endpoints
 app.post('/api/agent/session/start', async (req, res) => {
-  const { startPos } = req.body || {};
-  const result = await startAgentSession({ startPos });
+  const { startPos, forceProvider } = req.body || {};
+  const result = await startAgentSession({ startPos, forceProvider });
   return res.status(result.status).json(result.data);
 });
 
@@ -56,4 +61,3 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 export default app;
-

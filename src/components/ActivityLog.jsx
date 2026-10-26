@@ -13,7 +13,10 @@ import {
   Code,
   Bot,
   Sparkles,
-  Cpu
+  Cpu,
+  Zap,
+  RefreshCw,
+  AlertTriangle
 } from 'lucide-react';
 import { LOG_TYPES } from '../game/engine.js';
 
@@ -29,10 +32,26 @@ function LogItem({ log }) {
     Icon = Bot;
     badgeClass = 'badge-start';
     badgeText = 'AGENT STARTED';
-  } else if (log.type === LOG_TYPES.GEMINI_RESPONSE) {
+  } else if (log.type === LOG_TYPES.PROVIDER_SELECTED) {
+    Icon = Zap;
+    badgeClass = 'badge-start';
+    badgeText = 'PROVIDER SELECTED';
+  } else if (log.type === LOG_TYPES.PROVIDER_SWITCHED) {
+    Icon = RefreshCw;
+    badgeClass = 'badge-adapted';
+    badgeText = 'PROVIDER SWITCHED';
+  } else if (log.type === LOG_TYPES.RATE_LIMITED) {
+    Icon = AlertTriangle;
+    badgeClass = 'badge-failure';
+    badgeText = 'RATE LIMITED';
+  } else if (log.type === LOG_TYPES.MISSION_CONTINUED) {
+    Icon = Play;
+    badgeClass = 'badge-success';
+    badgeText = 'MISSION CONTINUED';
+  } else if (log.type === LOG_TYPES.GEMINI_RESPONSE || log.type === LOG_TYPES.AI_RESPONSE) {
     Icon = Sparkles;
-    badgeClass = 'badge-gemini';
-    badgeText = 'GEMINI RESPONSE';
+    badgeClass = log.provider === 'groq' ? 'badge-groq' : 'badge-gemini';
+    badgeText = log.provider === 'groq' ? 'GROQ DECISION' : 'GEMINI DECISION';
   } else if (log.type === LOG_TYPES.AGENT_ADAPTED) {
     Icon = Cpu;
     badgeClass = 'badge-adapted';

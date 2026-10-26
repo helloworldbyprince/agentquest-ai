@@ -62,18 +62,20 @@ export function Header({
 
       if (response.ok && data.success) {
         setAiStatus('connected');
+        const providerName = data.provider === 'groq' ? 'Groq' : 'Gemini';
         const fallbackNote = data.fallbackFrom ? ` (Auto-fallback from ${data.fallbackFrom})` : '';
         setTestResult({
           loading: false,
           success: true,
+          provider: data.provider,
           model: data.model,
-          message: (data.message || 'AgentQuest AI connection successful.') + fallbackNote
+          message: `${providerName} (${data.model}${fallbackNote}): "${data.message || 'Connection successful.'}"`
         });
 
         if (onAddLog) {
           onAddLog(
             'TOOL_RESULT',
-            `Gemini API connected successfully (${data.model}${fallbackNote}): "${data.message}"`,
+            `AI Provider connected successfully [${providerName} — ${data.model}${fallbackNote}]: "${data.message}"`,
             { status: 'success', payload: data }
           );
         }
@@ -161,7 +163,7 @@ export function Header({
             <span className="ai-status-text">
               {aiStatus === 'not_connected' && 'AI Not Connected'}
               {aiStatus === 'connecting' && 'AI Connecting...'}
-              {aiStatus === 'connected' && 'Gemini Connected'}
+              {aiStatus === 'connected' && (testResult?.provider === 'groq' ? '⚡ Groq Connected' : '✨ AI Connected')}
               {aiStatus === 'failed' && 'Connection Failed'}
             </span>
           </div>
@@ -171,7 +173,7 @@ export function Header({
             className="btn btn-primary btn-sm btn-ai-test"
             onClick={handleTestConnection}
             disabled={aiStatus === 'connecting'}
-            title="Send test prompt to Google Gemini API"
+            title="Test connection to Groq (Primary) and Gemini (Fallback)"
           >
             {aiStatus === 'connecting' ? (
               <Loader2 size={14} className="animate-spin" />

@@ -30,6 +30,8 @@ export function App() {
     speed,
     setSpeed,
     isAgentBusy,
+    activeProvider,
+    activeModel,
     startAgent,
     pauseAgent,
     resumeAgent,
@@ -242,6 +244,8 @@ export function App() {
             agentSpeed={speed}
             onSpeedChange={setSpeed}
             isAgentBusy={isAgentBusy}
+            activeProvider={activeProvider}
+            activeModel={activeModel}
             onStart={handleStartMission}
             onPause={handlePauseMission}
             onResume={handleResumeMission}

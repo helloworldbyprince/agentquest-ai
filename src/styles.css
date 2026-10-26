@@ -1386,8 +1386,33 @@ button {
 .badge-door { background: #FFEDD5; color: #C2410C; }
 .badge-win { background: var(--mint-bg); color: var(--mint-text); }
 .badge-start { background: var(--primary-subtle); color: var(--primary); }
+.badge-groq { background: #FFEDD5; color: #EA580C; font-weight: 700; }
 .badge-gemini { background: #EDE9FE; color: #6D28D9; font-weight: 700; }
 .badge-adapted { background: #FEF3C7; color: #B45309; }
+
+.active-model-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  margin-left: 8px;
+  box-shadow: var(--shadow-sm);
+  transition: all 0.2s ease;
+}
+
+.provider-groq {
+  background: #FFEDD5;
+  color: #C2410C;
+  border: 1px solid #FDBA74;
+}
+
+.provider-gemini {
+  background: #EDE9FE;
+  color: #6D28D9;
+  border: 1px solid #DDD6FE;
+}
 
 .log-time {
   margin-left: auto;

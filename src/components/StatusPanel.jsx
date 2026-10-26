@@ -26,6 +26,8 @@ export function StatusPanel({
   agentSpeed = AGENT_SPEEDS.normal.ms,
   onSpeedChange,
   isAgentBusy = false,
+  activeProvider = 'groq',
+  activeModel = 'openai/gpt-oss-20b',
   onStart,
   onPause,
   onResume,
@@ -56,6 +58,15 @@ export function StatusPanel({
             <span className="status-mode-tag">
               {gameMode === 'agent' ? '🤖 Autonomous AI Agent' : '🎮 Manual Player'}
             </span>
+            {gameMode === 'agent' && (
+              <span
+                className={`active-model-pill ${activeProvider === 'groq' ? 'provider-groq' : 'provider-gemini'}`}
+                title={`Active AI Provider: ${activeProvider.toUpperCase()} (${activeModel})`}
+              >
+                {activeProvider === 'groq' ? '⚡ Groq: ' : '✨ Gemini: '}
+                {activeModel.includes('/') ? activeModel.split('/')[1] : activeModel}
+              </span>
+            )}
           </div>
           <h2 className="status-title">Mission Overview</h2>
         </div>
