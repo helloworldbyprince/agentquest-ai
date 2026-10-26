@@ -369,15 +369,15 @@ export async function stepAgentSession({
     };
   }
 
-  // Action budget check: default 150 actions (or session.actionBudget)
-  const maxActions = session.actionBudget || 150;
+  // High safety ceiling (1000 actions) to prevent memory leak/runaway process without capping normal local exploration
+  const maxActions = session.actionBudget || 1000;
   if (session.actionCount >= maxActions) {
     return {
       status: 200,
       data: {
         success: false,
         limitReached: true,
-        error: `Action budget of ${maxActions} actions reached for this mission. Mission safely paused.`,
+        error: `Safety ceiling of ${maxActions} actions reached for this mission.`,
         actionCount: session.actionCount
       }
     };

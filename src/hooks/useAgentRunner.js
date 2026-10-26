@@ -25,7 +25,6 @@ export function useAgentRunner({
   const [sessionId, setSessionId] = useState(null);
   const [activeProvider, setActiveProvider] = useState('groq');
   const [activeModel, setActiveModel] = useState('openai/gpt-oss-20b');
-  const [maxActionBudget, setMaxActionBudget] = useState(100);
 
   // Control refs for non-stale access inside async loop
   const controlRef = useRef({
@@ -243,53 +242,6 @@ export function useAgentRunner({
         break;
       }
 
-      // Check Action Budget (default 100 game actions, safely pauses with resume option)
-      let currentBudget = maxActionBudget;
-      if (currentState.stats.toolCalls >= currentBudget) {
-        const limitLog = createLogEntry(
-          LOG_TYPES.LIMIT_REACHED,
-          `Action budget reached (${currentBudget} actions). Mission safely paused. Click Resume Agent to continue (+50 actions).`,
-          { status: 'warning' }
-        );
-        currentState = {
-          ...currentState,
-          status: MISSION_STATUS.LIMIT_REACHED,
-          logs: [...currentState.logs, limitLog]
-        };
-        setGameState(currentState);
-        controlRef.current.isPaused = true;
-        controlRef.current.pauseStartTime = Date.now();
-        setIsAgentBusy(false);
-
-        // Wait for user to resume
-        await checkPause();
-        if (controlRef.current.isStopped) break;
-        if (controlRef.current.pauseStartTime) {
-          controlRef.current.totalPausedMs =
-            (controlRef.current.totalPausedMs || 0) + (Date.now() - controlRef.current.pauseStartTime);
-          controlRef.current.pauseStartTime = null;
-        }
-        setIsAgentBusy(true);
-
-        // Expand budget by +50 actions
-        currentBudget += 50;
-        setMaxActionBudget(currentBudget);
-
-        currentState = {
-          ...currentState,
-          status: MISSION_STATUS.RUNNING,
-          logs: [
-            ...currentState.logs,
-            createLogEntry(
-              LOG_TYPES.MISSION_CONTINUED,
-              `Action budget expanded to ${currentBudget} actions. Exploration resuming.`,
-              { status: 'info' }
-            )
-          ]
-        };
-        setGameState(currentState);
-      }
-
       // Visual Playback Delay between steps (skipped if 0ms)
       if (speed > 0) {
         await sleep(speed);
@@ -322,11 +274,11 @@ export function useAgentRunner({
           const stepData = await safeJson(stepResponse);
 
           if (!stepResponse.ok || !stepData.success) {
-            // Check if action budget limit reached on backend
+            // Check if action safety limit reached on backend
             if (stepData.limitReached) {
               const limitLog = createLogEntry(
                 LOG_TYPES.LIMIT_REACHED,
-                `Action budget reached (${maxActionBudget} actions). Mission safely paused. Click Resume Agent to continue (+50 actions).`,
+                'Mission action limit reached. Mission safely paused. Click Resume Agent to continue.',
                 { status: 'warning' }
               );
               currentState = {
@@ -348,8 +300,6 @@ export function useAgentRunner({
                 controlRef.current.pauseStartTime = null;
               }
               setIsAgentBusy(true);
-
-              setMaxActionBudget((prev) => prev + 50);
               continue;
             }
 
@@ -538,8 +488,6 @@ export function useAgentRunner({
     sessionId,
     activeProvider,
     activeModel,
-    maxActionBudget,
-    setMaxActionBudget,
     startAgent,
     pauseAgent,
     resumeAgent,

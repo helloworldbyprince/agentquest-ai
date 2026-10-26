@@ -28,7 +28,6 @@ export function StatusPanel({
   isAgentBusy = false,
   activeProvider = 'groq',
   activeModel = 'openai/gpt-oss-20b',
-  maxActionBudget = 100,
   onStart,
   onPause,
   onResume,
@@ -142,10 +141,10 @@ export function StatusPanel({
         <div className="stat-box">
           <div className="stat-label">
             <Activity size={14} className="text-indigo-500" />
-            <span>Actions Budget</span>
+            <span>Tool Calls</span>
           </div>
           <div className="stat-value">
-            {stats.toolCalls} / {maxActionBudget}
+            {stats.toolCalls}
             <span className="stat-sub-counts">
               (<span className="text-emerald-600">{stats.successfulActions}</span> /{' '}
               <span className="text-rose-500">{stats.failedActions}</span>)
@@ -229,10 +228,10 @@ export function StatusPanel({
                 <button
                   className="btn btn-primary btn-flex"
                   onClick={onResumeAgent}
-                  title={isLimitReached ? 'Resume agent with +50 additional action budget' : 'Resume agent mission'}
+                  title="Resume agent mission"
                 >
                   <Play size={16} />
-                  <span>{isLimitReached ? 'Resume (+50 Actions)' : 'Resume Agent'}</span>
+                  <span>Resume Agent</span>
                 </button>
                 <button
                   className="btn btn-danger btn-flex"

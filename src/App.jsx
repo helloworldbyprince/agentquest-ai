@@ -32,7 +32,6 @@ export function App() {
     isAgentBusy,
     activeProvider,
     activeModel,
-    maxActionBudget,
     startAgent,
     pauseAgent,
     resumeAgent,
@@ -263,7 +262,6 @@ export function App() {
             isAgentBusy={isAgentBusy}
             activeProvider={activeProvider}
             activeModel={activeModel}
-            maxActionBudget={maxActionBudget}
             onStart={handleStartMission}
             onPause={handlePauseMission}
             onResume={handleResumeMission}
