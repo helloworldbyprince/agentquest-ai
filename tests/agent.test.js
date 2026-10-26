@@ -185,3 +185,4 @@ describe('Live Gemini API Function Calling Integration (Real API Call)', () => {
     20000 // 20s timeout for live API network call
   );
 });
+
