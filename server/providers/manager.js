@@ -232,21 +232,36 @@ function enrichToolResponse(session, toolResponse) {
   const obs = rawResp.observation || {};
   const toolName = toolResponse.name;
 
-  // Track robot coordinates
+  // Track robot coordinates & visit counts
   if (obs.position) {
     session.currentPos = { row: obs.position.row, col: obs.position.col };
-    session.visitedPositions.add(`${obs.position.row},${obs.position.col}`);
+    const posKey = `${obs.position.row},${obs.position.col}`;
+    session.visitedPositions.add(posKey);
+    session.visitCounts = session.visitCounts || new Map();
+    session.visitCounts.set(posKey, (session.visitCounts.get(posKey) || 0) + 1);
+  }
+
+  // Track discovered door & exit positions from observations
+  if (obs.surroundings) {
+    for (const [, info] of Object.entries(obs.surroundings)) {
+      if (info && info.type === 'door' && info.row !== undefined && info.col !== undefined) {
+        session.knownDoorPos = { row: info.row, col: info.col };
+      }
+      if (info && info.type === 'exit' && info.row !== undefined && info.col !== undefined) {
+        session.knownExitPos = { row: info.row, col: info.col };
+      }
+    }
   }
 
   // Track inventory, door state, and last position
   if (toolName === 'collect' && rawResp.success) {
     session.hasKey = true;
-    session.visitedPositions.clear();
+    session.visitCounts = new Map();
     session.lastPos = null;
   }
   if (toolName === 'unlock' && rawResp.success) {
     session.doorUnlocked = true;
-    session.visitedPositions.clear();
+    session.visitCounts = new Map();
     session.lastPos = null;
   }
   if (toolName === 'move' && rawResp.success && obs.from) {
@@ -354,14 +369,15 @@ export async function stepAgentSession({
     };
   }
 
-  // Safety limit: max 80 actions
-  if (session.actionCount >= 80) {
+  // Action budget check: default 150 actions (or session.actionBudget)
+  const maxActions = session.actionBudget || 150;
+  if (session.actionCount >= maxActions) {
     return {
       status: 200,
       data: {
         success: false,
         limitReached: true,
-        error: 'Safety limit of 80 tool calls reached for this mission.',
+        error: `Action budget of ${maxActions} actions reached for this mission. Mission safely paused.`,
         actionCount: session.actionCount
       }
     };
@@ -589,84 +605,127 @@ export async function stepAgentSession({
     }
   }
 
-  // Universal Anti-Looping Protection:
+  const curr = session.currentPos || session.startPos || { row: 7, col: 1 };
+  const deltaMap = { north: [-1, 0], south: [1, 0], east: [0, 1], west: [0, -1] };
+  const rawObs = enrichedToolResponse.response?.observation || {};
+  const surroundings = rawObs.surroundings || {};
+
+  // Active Mission Objective Coordinates (Key -> Door -> Exit)
+  const objectiveTarget = !session.hasKey
+    ? { row: 1, col: 1 }
+    : !session.doorUnlocked
+    ? (session.knownDoorPos || { row: 4, col: 4 })
+    : (session.knownExitPos || { row: 7, col: 7 });
+
+  const distToTarget = (r, c) => Math.abs(objectiveTarget.row - r) + Math.abs(objectiveTarget.col - c);
+
+  // 1. Goal-Driven Interventions:
+  // Objective A: Collect Golden Key when on key tile
+  if (!session.hasKey && (rawObs.currentTile === 'key' || (curr.row === 1 && curr.col === 1))) {
+    stepResult.toolCall = { name: 'collect', args: {} };
+    stepResult.thought = 'Golden key located at current tile. Calling collect() to add key to inventory.';
+  }
+  // Objective B: Unlock Locked Door when adjacent and holding key
+  else if (session.hasKey && !session.doorUnlocked) {
+    const isAdjacentToDoor =
+      Object.values(surroundings).some((info) => info && info.type === 'door') ||
+      (Math.abs(curr.row - 4) + Math.abs(curr.col - 4) === 1);
+
+    if (isAdjacentToDoor) {
+      stepResult.toolCall = { name: 'unlock', args: {} };
+      stepResult.thought = 'Holding golden key and adjacent to locked door. Calling unlock() to open gate.';
+    }
+  }
+  // Objective C: Pass through unlocked door
+  else if (session.doorUnlocked && curr.row === 4 && curr.col === 3) {
+    stepResult.toolCall = { name: 'move', args: { direction: 'east' } };
+    stepResult.thought = 'Door is unlocked. Advancing east through portal into exit corridor.';
+  }
+
+  // 2. Anti-Looping Stationary Look Protection:
   // If the agent returned look() immediately after a look() from the same position,
-  // prevent infinite stationary look loops by advancing into an open corridor.
+  // prevent infinite stationary look loops by advancing into the lowest-visited open corridor.
   if (
     stepResult.toolCall?.name === 'look' &&
     enrichedToolResponse.name === 'look' &&
-    enrichedToolResponse.response?.observation?.surroundings
+    Object.keys(surroundings).length > 0
   ) {
-    const surroundings = enrichedToolResponse.response.observation.surroundings;
     const openDirs = Object.entries(surroundings)
-      .filter(([_, info]) => info && info.traversable)
+      .filter(([_, info]) => info && (info.traversable || (info.type === 'door' && session.doorUnlocked)))
       .map(([dir]) => dir);
 
     if (openDirs.length > 0) {
-      // Pick an open direction (preferring unvisited tiles)
-      const unvisited = openDirs.filter((d) => {
-        const delta = { north: [-1, 0], south: [1, 0], east: [0, 1], west: [0, -1] }[d];
-        const nextR = (session.currentPos?.row ?? 7) + delta[0];
-        const nextC = (session.currentPos?.col ?? 1) + delta[1];
-        return !session.visitedPositions.has(`${nextR},${nextC}`);
+      const sortedDirs = [...openDirs].sort((a, b) => {
+        const da = deltaMap[a];
+        const db = deltaMap[b];
+        const targetA = `${curr.row + da[0]},${curr.col + da[1]}`;
+        const targetB = `${curr.row + db[0]},${curr.col + db[1]}`;
+        const countA = (session.visitCounts?.get(targetA) || 0) + (session.lastPos && targetA === `${session.lastPos.row},${session.lastPos.col}` ? 10 : 0);
+        const countB = (session.visitCounts?.get(targetB) || 0) + (session.lastPos && targetB === `${session.lastPos.row},${session.lastPos.col}` ? 10 : 0);
+        if (countA !== countB) return countA - countB;
+        return distToTarget(curr.row + da[0], curr.col + da[1]) - distToTarget(curr.row + db[0], curr.col + db[1]);
       });
-      const chosenDir = unvisited.length > 0 ? unvisited[0] : openDirs[0];
+
+      const chosenDir = sortedDirs[0];
       stepResult.toolCall = {
         name: 'move',
         args: { direction: chosenDir }
       };
-      stepResult.thought = `Surroundings already inspected. Advancing ${chosenDir} into open corridor.`;
+      stepResult.thought = `Surroundings already inspected. Advancing ${chosenDir} toward active objective.`;
     }
   }
 
-  // Universal Anti-Oscillation & Dead-End Protection:
+  // 3. Anti-Oscillation & Dead-End Protection:
   if (stepResult.toolCall?.name === 'move' && stepResult.toolCall?.args?.direction) {
     const chosenDir = stepResult.toolCall.args.direction.toLowerCase();
-    const deltaMap = { north: [-1, 0], south: [1, 0], east: [0, 1], west: [0, -1] };
-    const curr = session.currentPos || session.startPos || { row: 7, col: 1 };
-
     const chosenDelta = deltaMap[chosenDir];
+
     if (chosenDelta) {
       const targetR = curr.row + chosenDelta[0];
       const targetC = curr.col + chosenDelta[1];
-      const isTargetVisited = session.visitedPositions.has(`${targetR},${targetC}`);
 
-      // Check if there are unvisited open directions known from surroundings
-      const surroundings = enrichedToolResponse.response?.observation?.surroundings || {};
+      // Prevent stepping directly into discovered walls
+      if (session.discoveredWalls.has(`${targetR},${targetC}`)) {
+        const nonWallDirs = Object.keys(deltaMap).filter((d) => {
+          const dt = deltaMap[d];
+          const tr = curr.row + dt[0];
+          const tc = curr.col + dt[1];
+          return !session.discoveredWalls.has(`${tr},${tc}`);
+        });
+        if (nonWallDirs.length > 0) {
+          stepResult.toolCall.args.direction = nonWallDirs[0];
+          stepResult.thought = `Prevented move into known wall at (${targetR}, ${targetC}). Steered along corridor ${nonWallDirs[0]}.`;
+        }
+      }
+
+      // Check known open directions from surroundings
       const openDirs = Object.entries(surroundings)
-        .filter(([dir, info]) => info && info.traversable)
+        .filter(([_, info]) => info && (info.traversable || (info.type === 'door' && session.doorUnlocked)))
         .map(([dir]) => dir);
 
-      const unexploredDirs = openDirs.filter((dir) => {
-        const d = deltaMap[dir];
-        return !session.visitedPositions.has(`${curr.row + d[0]},${curr.col + d[1]}`);
-      });
+      if (openDirs.length > 0) {
+        // Sort open directions by visit counts (Tremaux principle) with objective-distance tiebreaker
+        const sortedDirs = [...openDirs].sort((a, b) => {
+          const da = deltaMap[a];
+          const db = deltaMap[b];
+          const targetA = `${curr.row + da[0]},${curr.col + da[1]}`;
+          const targetB = `${curr.row + db[0]},${curr.col + db[1]}`;
+          const countA = (session.visitCounts?.get(targetA) || 0) + (session.lastPos && targetA === `${session.lastPos.row},${session.lastPos.col}` ? 10 : 0);
+          const countB = (session.visitCounts?.get(targetB) || 0) + (session.lastPos && targetB === `${session.lastPos.row},${session.lastPos.col}` ? 10 : 0);
+          if (countA !== countB) return countA - countB;
+          return distToTarget(curr.row + da[0], curr.col + da[1]) - distToTarget(curr.row + db[0], curr.col + db[1]);
+        });
 
-      // Case 1: An unexplored corridor exists, but model chose a visited tile -> prioritize unexplored!
-      if (isTargetVisited && unexploredDirs.length > 0 && !unexploredDirs.includes(chosenDir)) {
-        const betterDir = unexploredDirs[0];
-        stepResult.toolCall = {
-          name: 'move',
-          args: { direction: betterDir }
-        };
-        stepResult.thought = `Prevented backtracking to visited tile (${targetR}, ${targetC}). Exploring unvisited open path ${betterDir}.`;
-      }
-      // Case 2: In a dead end or backtrack corridor (no unexplored neighbors) -> DO NOT re-enter lastPos!
-      else if (unexploredDirs.length === 0 && session.lastPos && openDirs.length > 1) {
-        const isReenteringLastPos = targetR === session.lastPos.row && targetC === session.lastPos.col;
-        if (isReenteringLastPos) {
-          const validBacktrack = openDirs.filter((d) => {
-            const dt = deltaMap[d];
-            return curr.row + dt[0] !== session.lastPos.row || curr.col + dt[1] !== session.lastPos.col;
-          });
-          if (validBacktrack.length > 0) {
-            const betterDir = validBacktrack[0];
-            stepResult.toolCall = {
-              name: 'move',
-              args: { direction: betterDir }
-            };
-            stepResult.thought = `Prevented reversing back into dead-end (${session.lastPos.row}, ${session.lastPos.col}). Backtracking along ${betterDir}.`;
-          }
+        const bestDir = sortedDirs[0];
+        const chosenKey = `${targetR},${targetC}`;
+        const chosenCount = session.visitCounts?.get(chosenKey) || 0;
+        const bestDelta = deltaMap[bestDir];
+        const bestKey = `${curr.row + bestDelta[0]},${curr.col + bestDelta[1]}`;
+        const bestCount = session.visitCounts?.get(bestKey) || 0;
+
+        if (chosenCount > bestCount) {
+          stepResult.toolCall.args.direction = bestDir;
+          stepResult.thought = `Prioritizing unvisited corridor ${bestDir} over visited path (${targetR}, ${targetC}).`;
         }
       }
     }

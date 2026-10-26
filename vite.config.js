@@ -13,7 +13,8 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    globals: true
+    globals: true,
+    include: ['tests/**/*.test.js']
   }
 });
 

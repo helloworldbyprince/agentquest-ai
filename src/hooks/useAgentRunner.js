@@ -294,6 +294,31 @@ export function useAgentRunner({
           const stepData = await safeJson(stepResponse);
 
           if (!stepResponse.ok || !stepData.success) {
+            // Check if action budget limit reached on backend
+            if (stepData.limitReached) {
+              const limitLog = createLogEntry(
+                LOG_TYPES.LIMIT_REACHED,
+                `Action budget reached (${maxActionBudget} actions). Mission safely paused. Click Resume Agent to continue (+50 actions).`,
+                { status: 'warning' }
+              );
+              currentState = {
+                ...currentState,
+                status: MISSION_STATUS.LIMIT_REACHED,
+                logs: [...currentState.logs, limitLog]
+              };
+              setGameState(currentState);
+              controlRef.current.isPaused = true;
+              setIsAgentBusy(false);
+
+              // Wait until user clicks "Resume Agent"
+              await checkPause();
+              if (controlRef.current.isStopped) break;
+              setIsAgentBusy(true);
+
+              setMaxActionBudget((prev) => prev + 50);
+              continue;
+            }
+
             // Check if all providers are temporarily unavailable
             if (stepData.allProvidersUnavailable) {
               currentState = {
