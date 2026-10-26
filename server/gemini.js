@@ -5,7 +5,7 @@ import { GoogleGenAI } from '@google/genai';
  */
 export async function testGeminiConnection({
   apiKey = process.env.GEMINI_API_KEY,
-  modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+  modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite',
   timeoutMs = 15000
 } = {}) {
   if (!apiKey || apiKey.trim() === '' || apiKey === 'your_gemini_api_key_here') {

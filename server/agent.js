@@ -94,7 +94,7 @@ export function getActiveSessionsCount() {
  */
 export async function startAgentSession({
   apiKey = process.env.GEMINI_API_KEY,
-  modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+  modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite',
   startPos = { row: 7, col: 1 }
 } = {}) {
   if (!apiKey || apiKey.trim() === '' || apiKey === 'your_gemini_api_key_here') {
